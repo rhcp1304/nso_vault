@@ -58,6 +58,7 @@ def authenticate_google_drive():
         print(f"Error building Drive service: {e}")
         return None
 
+
 def get_market_and_zone_name_from_ppt(ppt_path):
     market_name = None
     zone_name = None
@@ -87,11 +88,14 @@ def get_market_and_zone_name_from_ppt(ppt_path):
             return None, None
 
         if zone_name:
-            market_pattern = r"(?:^|\s)" + re.escape(zone_name) + r"\s+\d" + r"(?:.*?_){2,}.*?(?=\n|$)"
+            # CORRECTED REGEX
+            # The pattern is now anchored to the end of the line with $
+            market_pattern = r"^" + re.escape(zone_name) + r"\s*\d_.*?_.*$"
+
             market_match = re.search(
                 market_pattern,
                 slide_text,
-                re.IGNORECASE | re.DOTALL
+                re.IGNORECASE | re.MULTILINE  # REMOVED re.DOTALL
             )
             if market_match:
                 market_name = market_match.group(0).strip()
@@ -99,7 +103,7 @@ def get_market_and_zone_name_from_ppt(ppt_path):
                 print(f"DEBUG: Found new market name: {market_name}")
             else:
                 print(
-                    f"Could not find a string starting with '{zone_name}' followed by a space and a digit, with at least two underscores, and ending at a newline.")
+                    f"Could not find a string starting with '{zone_name}' followed by a space and a digit, with at least two underscores.")
 
         if market_name is None:
             print(f"DEBUG: Extracted slide text:\n---START---\n{slide_text}\n---END---")
@@ -155,7 +159,6 @@ def find_or_create_folder(service, folder_name, parent_folder_id):
         print(f"An unexpected error occurred while finding/creating folder '{folder_name}': {e}")
         return None
 
-# --- NEW HELPER FUNCTION FOR UPLOADING ---
 def upload_file_to_drive(service, file_path, parent_folder_id):
     try:
         file_name = os.path.basename(file_path)
@@ -175,7 +178,6 @@ def upload_file_to_drive(service, file_path, parent_folder_id):
         return None
 
 
-# --- MAIN PROCESSING FUNCTION (Updated) ---
 def main_processor(ppt_file_path, parent_folder_id):
     print("Starting PPT processing and folder creation using OAuth 2.0...")
     drive_service = authenticate_google_drive()
@@ -203,7 +205,7 @@ def main_processor(ppt_file_path, parent_folder_id):
             print(f"Failed to find or create Zone folder '{zone_name}'. Market folder will be created directly under the main parent.")
 
     # Create the final market folder
-    market_folder_id = create_drive_folder(drive_service, market_name, target_parent_for_market)
+    market_folder_id = find_or_create_folder(drive_service, market_name, target_parent_for_market)
 
     if not market_folder_id:
         print(f"Failed to create Market folder '{market_name}'. PPT file not uploaded.")
@@ -219,7 +221,6 @@ def main_processor(ppt_file_path, parent_folder_id):
     print("Process completed successfully.")
 
 
-# --- Main Execution Block (Updated) ---
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description='Uploads a local PowerPoint file to Google Drive and organizes it into a new folder.'
