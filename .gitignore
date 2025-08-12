@@ -1,0 +1,64 @@
+/.nso_env/
+/downloaded_videos/
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual Environments
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Distribution / Packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# IDEs and Editors
+.idea/                  # JetBrains IDEs (PyCharm, IntelliJ)
+.vscode/                # VS Code
+.sublime-workspace
+.sublime-project
+*.swp
+*.swo
+*~
+
+# Django specific
+*.log                   # Log files
+*.sqlite3               # SQLite database files
+media/                  # User-uploaded media files (Django's MEDIA_ROOT)
+static/                 # Collected static files (Django's STATIC_ROOT)
+local_settings.py       # Sensitive local settings (should not be committed)
+settings/local.py       # Alternative for sensitive local settings if using a settings package
+db.sqlite3              # Default SQLite database file
+
+# Google Drive/YouTube API specific files (from your project context)
+*.pickle                # e.g., token.pickle, youtube_token.pickle
+*.pkl                   # e.g., last_change_token.pkl
+credentials.json        # Google API credentials (client_secrets.json renamed)
+youtube_credentials.json # YouTube API credentials
+
+# Thumbnails (if your project generates them locally)
+.thumbnails/
+
+# Backup files
+*.bak
+*.old
+*.tmp
+/merged_video.mp4
+/merged_video_timestamps.txt
+/merged_sample_vid.mp4
+/final_consolidated_property_video.mp4
+/final_consolidated_property_video_timestamps.txt
+/merged_output_videos/
+/property_approval_meeting/helpers/temp_drive_downloads
+/temp_drive_downloads/
+/youtube_upload_log.txt
+/temp_pipeline_downloads/
