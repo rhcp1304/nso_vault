@@ -1,0 +1,40 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Google Drive Uploader</title>
+    <link rel="stylesheet" href="{% static 'uploader/style.css' %}">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <img src="{% static 'uploader/logo.png' %}" alt="Google Drive Logo" class="logo">
+            <h1>PPT to Drive Uploader</h1>
+            <p>Select a PowerPoint file and a destination, and this tool will automatically upload and organize it on Google Drive.</p>
+        </header>
+
+        <form id="uploadForm">
+            <div class="form-group">
+                <label for="pptFile">PowerPoint File (.pptx)</label>
+                <input type="file" id="pptFile" accept=".pptx" required>
+            </div>
+
+            <div class="form-group">
+                <label for="parentFolderId">Google Drive Parent Folder ID</label>
+                <input type="text" id="parentFolderId" placeholder="e.g., 1A2b3C4d5E6f7G8h9I0jKL" required>
+                <small>The ID is the long string of characters in the Drive folder's URL.</small>
+            </div>
+
+            <button type="submit" id="uploadBtn">
+                <span id="buttonText">Upload and Organize</span>
+                <div class="spinner" hidden></div>
+            </button>
+        </form>
+        <div id="status" class="status-message" role="alert" aria-live="polite" hidden></div>
+    </div>
+    <script src="{% static 'uploader/script.js' %}"></script>
+</body>
+</html>
