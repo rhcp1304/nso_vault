@@ -34,7 +34,6 @@ dist/
 *.log                   # Log files
 *.sqlite3               # SQLite database files
 media/                  # User-uploaded media files (Django's MEDIA_ROOT)
-static/                 # Collected static files (Django's STATIC_ROOT)
 local_settings.py       # Sensitive local settings (should not be committed)
 settings/local.py       # Alternative for sensitive local settings if using a settings package
 db.sqlite3              # Default SQLite database file
