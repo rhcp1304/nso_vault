@@ -28,7 +28,6 @@ DEBUG = False
 ALLOWED_HOSTS = ['nso-vault.onrender.com','nso-vault.vercel.app', '.vercel.app', '127.0.0.1']
 
 
-# Application definition
 
 INSTALLED_APPS = [
     'whitenoise.runserver_nostatic',
