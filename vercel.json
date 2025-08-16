@@ -9,10 +9,6 @@
     {
       "src": "/static/(.*)",
       "dest": "/static/$1"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "nso_vault/wsgi.py"
     }
   ]
 }
