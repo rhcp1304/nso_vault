@@ -1,25 +1,15 @@
 {
   "builds": [
     {
-      "src": "your_project_name/wsgi.py",
-      "use": "@vercel/python"
-    },
-    {
-      "src": "build.sh",
-      "use": "@vercel/static-build",
-      "config": {
-        "distDir": "static"
-      }
+      "src": "nso_vault/wsgi.py",
+      "use": "@vercel/python",
+      "config": { "maxLambdaSize": "15mb", "runtime": "python3.13.5" }
     }
   ],
   "routes": [
     {
-      "src": "/static/(.*)",
-      "dest": "/static/$1"
-    },
-    {
       "src": "/(.*)",
-      "dest": "your_project_name/wsgi.py"
+      "dest": "nso_vault/wsgi.py"
     }
   ]
 }
