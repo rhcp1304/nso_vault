@@ -23,9 +23,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = 'django-insecure-!m*v2=5^+e9#*17!j^j7i85$r7+55udl1=d_5nkd_6_wu1mk+&'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 
-ALLOWED_HOSTS = ['nso-vault.onrender.com']
+ALLOWED_HOSTS = ['nso-vault.onrender.com','nso-vault.vercel.app', '.vercel.app', '127.0.0.1']
 
 
 # Application definition
@@ -67,7 +67,7 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'nso_vault.wsgi.application'
+WSGI_APPLICATION = 'api.wsgi.application'
 
 
 # Database
