@@ -1,8 +1,15 @@
 {
   "builds": [
     {
-      "src": "nso_vault/wsgi.py",
+      "src": "your_project_name/wsgi.py",
       "use": "@vercel/python"
+    },
+    {
+      "src": "build.sh",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "static"
+      }
     }
   ],
   "routes": [
@@ -12,7 +19,7 @@
     },
     {
       "src": "/(.*)",
-      "dest": "nso_vault/wsgi.py"
+      "dest": "your_project_name/wsgi.py"
     }
   ]
 }
