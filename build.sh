@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -o errexit  # exit on error
+set -o errexit
 
-python -m pip install -r requirements.txt
-python manage.py collectstatic --noinput
+/usr/local/bin/python3 -m pip install -r requirements.txt
+/usr/local/bin/python3 manage.py collectstatic --noinput
