@@ -62,4 +62,4 @@ youtube_credentials.json # YouTube API credentials
 /youtube_upload_log.txt
 /temp_pipeline_downloads/
 /static/
-/ststicfiles/
+/staticfiles/
