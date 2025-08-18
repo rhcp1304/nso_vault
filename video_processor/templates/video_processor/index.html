@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Processor</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <div class="container mt-5">
+        <h1 class="text-center mb-4">Video Processor</h1>
+        <div class="card p-4 shadow-sm">
+            <p class="text-center">Enter a Google Drive folder ID to find a PowerPoint, download linked videos, and upload them back to the same folder.</p>
+            <div id="alert-container"></div>
+            <form id="video-form">
+                {% csrf_token %}
+                <div class="form-group">
+                    <label for="google_drive_folder_id">Google Drive Folder ID:</label>
+                    <input type="text" class="form-control" id="google_drive_folder_id" name="google_drive_folder_id" placeholder="Enter Folder ID" required>
+                </div>
+                <button type="submit" class="btn btn-success btn-block">Start Processing</button>
+            </form>
+        </div>
+    </div>
+    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+    <script>
+        $(document).ready(function() {
+            $('#video-form').on('submit', function(e) {
+                e.preventDefault();
+                $('#alert-container').empty();
+                var formData = new FormData(this);
+                $.ajax({
+                    url: '/video_processor/start/',
+                    type: 'POST',
+                    data: formData,
+                    processData: false,
+                    contentType: false,
+                    beforeSend: function() {
+                        $('button[type="submit"]').prop('disabled', true).text('Processing...');
+                    },
+                    success: function(response) {
+                        $('button[type="submit"]').prop('disabled', false).text('Start Processing');
+                        var alertHtml = '<div class="alert alert-success" role="alert">' + response.message + '</div>';
+                        $('#alert-container').html(alertHtml);
+                        $('#video-form')[0].reset();
+                    },
+                    error: function(xhr) {
+                        $('button[type="submit"]').prop('disabled', false).text('Start Processing');
+                        var errorMessage = 'An error occurred. Please try again.';
+                        if (xhr.responseJSON && xhr.responseJSON.message) {
+                            errorMessage = xhr.responseJSON.message;
+                        }
+                        var alertHtml = '<div class="alert alert-danger" role="alert">Error: ' + errorMessage + '</div>';
+                        $('#alert-container').html(alertHtml);
+                    }
+                });
+            });
+        });
+    </script>
+</body>
+</html>
