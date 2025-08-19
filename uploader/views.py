@@ -1,7 +1,6 @@
 import os
 import re
 import pickle
-import io
 import tempfile
 from django.shortcuts import render
 from django.http import JsonResponse
@@ -14,14 +13,11 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
 from pptx import Presentation
 
-# --- Configuration ---
-# On a Django server, these files should be in the project root.
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CREDENTIALS_FILE = os.path.join(BASE_DIR, 'bdstorage_credentials.json')
 TOKEN_FILE_PATH = os.path.join(BASE_DIR, 'token.pickle')
 
 
-# --- Helper Functions ---
 def authenticate_google_drive():
     SCOPES = ['https://www.googleapis.com/auth/drive']
     creds = None

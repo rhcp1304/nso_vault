@@ -10,9 +10,15 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 from pptx import Presentation
 from pytubefix import YouTube, exceptions as pytube_exceptions
+from google.oauth2.credentials import Credentials
 
+# =================================================================================
+# === Helper Functions and Classes ===
+# =================================================================================
+
+# --- Configuration Constants ---
 SCOPES_VIDEO = ['https://www.googleapis.com/auth/drive']
-TOKEN_FILE_VIDEO = 'token.pickle'
+TOKEN_FILE_VIDEO = 'token.pickle'  # Changed to .pickle for consistency
 CREDENTIALS_FILE_VIDEO = 'bdstorage_credentials.json'
 API_SERVICE_NAME = 'drive'
 API_VERSION = 'v3'
@@ -52,7 +58,8 @@ class DriveHelper:
                 try:
                     creds = pickle.load(token)
                 except Exception as e:
-                    self._log(f"Error loading {TOKEN_FILE_VIDEO}: {e}. Re-authenticating...", style_func=self.style.ERROR)
+                    self._log(f"Error loading {TOKEN_FILE_VIDEO}: {e}. Re-authenticating...",
+                              style_func=self.style.ERROR)
 
         # 2. Check if credentials are valid
         if not creds or not creds.valid:
@@ -220,28 +227,69 @@ class DriveHelper:
             return []
 
     def get_market_name_prefix(self, pptx_file_path: str) -> str:
+        """
+        Extracts the market name from the first slide of a PPTX file.
+        The market name is identified by a pattern: 'ZONE : [zone name]' followed by
+        a line starting with the zone name, a digit, and two underscores.
+        """
         if not os.path.exists(pptx_file_path):
             self._log(f"Error: PPTX file not found locally at '{pptx_file_path}'", style_func=self.style.ERROR)
             return ""
         try:
             prs = Presentation(pptx_file_path)
-            for slide in prs.slides:
-                for shape in slide.shapes:
-                    if shape.has_text_frame:
-                        for paragraph in shape.text_frame.paragraphs:
-                            full_text = "".join([run.text for run in paragraph.runs])
-                            if "Market Name -" in full_text:
-                                market_name_value = full_text.split("Market Name -", 1)[1].strip()
-                                if '_' in market_name_value:
-                                    prefix = market_name_value.rsplit('_', 1)[1].strip()
-                                    self._log(f"Extracted market name prefix: '{prefix}'")
-                                    return prefix
-                                else:
-                                    self._log(f"No underscore found in market name. Using full value.",
-                                              style_func=self.style.WARNING)
-                                    return market_name_value
-            self._log("Market Name field not found in the presentation.", style_func=self.style.WARNING)
-            return ""
+            if not prs.slides:
+                self._log("PPT has no slides.", style_func=self.style.WARNING)
+                return ""
+            first_slide = prs.slides[0]
+            slide_text = ""
+            for shape in first_slide.shapes:
+                if hasattr(shape, "text_frame") and shape.text_frame:
+                    for paragraph in shape.text_frame.paragraphs:
+                        slide_text += paragraph.text + "\n"
+
+            # 1. Search for the ZONE name
+            zone_match = re.search(
+                r"ZONE\s*:\s*(.*?)(?:\s*STATE|\s*CITY|\s*PIN CODE|$)",
+                slide_text,
+                re.IGNORECASE | re.DOTALL
+            )
+            if not zone_match:
+                self._log("Could not find 'ZONE : ' on the first slide.", style_func=self.style.WARNING)
+                return ""
+
+            zone_name = zone_match.group(1).strip()
+            zone_name = re.sub(r'\s*\[Image \d+\]\s*', '', zone_name).strip()
+
+            if not zone_name:
+                self._log("Found 'ZONE : ' but the zone name was empty.", style_func=self.style.WARNING)
+                return ""
+
+            # 2. Use the zone name to find the market name
+            market_pattern = r"^" + re.escape(zone_name) + r"\s*\d_.*?_.*$"
+            market_match = re.search(
+                market_pattern,
+                slide_text,
+                re.IGNORECASE | re.MULTILINE
+            )
+
+            if market_match:
+                full_market_name = market_match.group(0).strip()
+                full_market_name = re.sub(r'\s*\[Image \d+\]\s*', '', full_market_name).strip()
+
+                # Apply the original logic to extract the prefix from the found market name
+                if '_' in full_market_name:
+                    prefix = full_market_name.rsplit('_', 1)[1].strip()
+                    self._log(f"Extracted market name prefix: '{prefix}'", style_func=self.style.INFO)
+                    return prefix
+                else:
+                    self._log(f"No underscore found in market name. Using full value: '{full_market_name}'",
+                              style_func=self.style.WARNING)
+                    return full_market_name
+            else:
+                self._log(
+                    f"Could not find a string starting with '{zone_name}' followed by a digit and two underscores.",
+                    style_func=self.style.WARNING)
+                return ""
         except Exception as e:
             self._log(f"An error occurred while extracting market name prefix: {e}", style_func=self.style.ERROR)
             return ""
