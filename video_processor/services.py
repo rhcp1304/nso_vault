@@ -275,7 +275,14 @@ def process_video_links_internal(google_drive_folder_id, temp_download_dir):
         return
     print(style.SUCCESS(f"PPTX downloaded to: {local_pptx_path}"))
     market_name_prefix_raw = drive_helper.get_market_name_prefix(local_pptx_path)
-    prefix_for_filename = f"{re.sub(r'[\\/:*?"<>|]', '', market_name_prefix_raw).strip()} " if market_name_prefix_raw else ""
+
+    # First, perform the regular expression substitution
+    cleaned_name = re.sub(r'[\\/:*?\"<>|]', '', market_name_prefix_raw).strip()
+
+    # Then, use the result in the f-string
+    prefix_for_filename = f"{cleaned_name} " if market_name_prefix_raw else ""
+
+    # prefix_for_filename = f"{re.sub(r'[\\/:*?"<>|]', '', market_name_prefix_raw).strip()} " if market_name_prefix_raw else ""
     print(
         f"Using market name prefix: '{prefix_for_filename}'" if prefix_for_filename else "No valid market name prefix found.")
     print("Extracting potential video links and associated names from PPTX...")
