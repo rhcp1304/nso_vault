@@ -1,8 +1,6 @@
 import os
 import re
 import pickle
-import io
-import tempfile
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
@@ -10,21 +8,15 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 from pptx import Presentation
 from pytubefix import YouTube, exceptions as pytube_exceptions
-from google.oauth2.credentials import Credentials
 
-# =================================================================================
-# === Helper Functions and Classes ===
-# =================================================================================
 
-# --- Configuration Constants ---
 SCOPES_VIDEO = ['https://www.googleapis.com/auth/drive']
-TOKEN_FILE_VIDEO = 'token.pickle'  # Changed to .pickle for consistency
+TOKEN_FILE_VIDEO = 'token.pickle'
 CREDENTIALS_FILE_VIDEO = 'bdstorage_credentials.json'
 API_SERVICE_NAME = 'drive'
 API_VERSION = 'v3'
 
 
-# --- Custom Logger/Style Class ---
 class Style:
     def SUCCESS(self, msg): return f"\033[92mSUCCESS: {msg}\033[0m"
 
@@ -35,7 +27,6 @@ class Style:
     def INFO(self, msg): return f"{msg}"
 
 
-# --- DriveHelper Class ---
 class DriveHelper:
     def __init__(self):
         self.style = Style()
@@ -51,7 +42,6 @@ class DriveHelper:
         token_path = os.path.join(os.getcwd(), TOKEN_FILE_VIDEO)
         credentials_path = os.path.join(os.getcwd(), CREDENTIALS_FILE_VIDEO)
 
-        # 1. Load credentials from the pickle file if it exists
         if os.path.exists(token_path):
             self._log(f"Loading credentials from {TOKEN_FILE_VIDEO}...")
             with open(token_path, 'rb') as token:
@@ -61,18 +51,15 @@ class DriveHelper:
                     self._log(f"Error loading {TOKEN_FILE_VIDEO}: {e}. Re-authenticating...",
                               style_func=self.style.ERROR)
 
-        # 2. Check if credentials are valid
         if not creds or not creds.valid:
-            # If expired, attempt to refresh
             if creds and creds.expired and creds.refresh_token:
                 self._log("Refreshing expired credentials...")
                 try:
                     creds.refresh(Request())
                 except Exception as e:
                     self._log(f"Error refreshing token: {e}. Re-authenticating...", style_func=self.style.ERROR)
-                    creds = None  # Force a new authentication if refresh fails
+                    creds = None
 
-            # If no valid credentials (or if refresh failed), perform the full flow
             if not creds:
                 self._log(f"No valid credentials found. Initiating authentication flow (check your browser)...")
                 if not os.path.exists(credentials_path):
@@ -83,7 +70,6 @@ class DriveHelper:
                 flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES_VIDEO)
                 creds = flow.run_local_server(port=0)
 
-            # 3. Save the new/refreshed credentials to the pickle file
             self._log(f"Saving new credentials to {TOKEN_FILE_VIDEO}...")
             with open(token_path, 'wb') as token:
                 pickle.dump(creds, token)
