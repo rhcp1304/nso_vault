@@ -1,9 +1,6 @@
 import os
-import io
 import re
 import pickle
-import ssl
-import tempfile
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
@@ -12,7 +9,7 @@ from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 from pptx import Presentation
 from pytubefix import YouTube, exceptions as pytube_exceptions
 
-# --- Configuration ---
+
 SCOPES_VIDEO = ['https://www.googleapis.com/auth/drive']
 TOKEN_FILE_VIDEO = 'token.pickle'
 CREDENTIALS_FILE_VIDEO = 'bdstorage_credentials.json'
@@ -21,7 +18,6 @@ API_VERSION = 'v3'
 
 
 class Style:
-    """A helper class for printing colored terminal messages."""
     def SUCCESS(self, msg): return f"\033[92mSUCCESS: {msg}\033[0m"
 
     def ERROR(self, msg): return f"\033[91mERROR: {msg}\033[0m"
@@ -32,7 +28,6 @@ class Style:
 
 
 class DriveHelper:
-    """A class to handle all Google Drive and YouTube-related operations."""
     def __init__(self):
         self.style = Style()
 
@@ -44,7 +39,6 @@ class DriveHelper:
 
     def get_authenticated_drive_service(self):
         creds = None
-        # Use os.getcwd() to make the path relative to the current working directory
         token_path = os.path.join(os.getcwd(), TOKEN_FILE_VIDEO)
         credentials_path = os.path.join(os.getcwd(), CREDENTIALS_FILE_VIDEO)
 
@@ -123,12 +117,8 @@ class DriveHelper:
     def download_youtube_video(self, youtube_url: str, destination_path: str):
         try:
             self._log(f"Downloading highest resolution video-only stream from: {youtube_url}")
-
-            # Instantiate YouTube without the ssl_context parameter
             yt = YouTube(youtube_url)
-
             video_stream = yt.streams.filter(progressive=False, only_video=True).order_by('resolution').desc().first()
-
             if video_stream:
                 self._log(f"Found video stream with resolution: {video_stream.resolution}")
                 video_stream.download(output_path=os.path.dirname(destination_path),
@@ -333,6 +323,7 @@ def process_video_links_internal(google_drive_folder_id, temp_download_dir):
     # Then, use the result in the f-string
     prefix_for_filename = f"{cleaned_name} " if market_name_prefix_raw else ""
 
+    # prefix_for_filename = f"{re.sub(r'[\\/:*?"<>|]', '', market_name_prefix_raw).strip()} " if market_name_prefix_raw else ""
     print(
         f"Using market name prefix: '{prefix_for_filename}'" if prefix_for_filename else "No valid market name prefix found.")
     print("Extracting potential video links and associated names from PPTX...")
@@ -378,6 +369,7 @@ def process_video_links_internal(google_drive_folder_id, temp_download_dir):
         elif youtube_match:
             print(f"\n--- Detected YouTube video link: {link} ---")
 
+            # The corrected line to remove the YouTube ID from the final name
             base_name = re.sub(r'[\\/:*?"<>|]', '', (suggested_name or 'youtube_video')).strip()
             final_video_name = f"{prefix_for_filename}{base_name}.mp4"
 
