@@ -87,7 +87,7 @@ def get_market_and_zone_name_from_ppt(ppt_path):
             return None, None
         if zone_name:
             # New combined pattern to capture both types of market names
-            market_pattern_combined = r"(?:^" + re.escape(zone_name) + r"\s*\d_.*?_.*$|^BD-.*$)"
+            market_pattern_combined = r"(?:^" + re.escape(zone_name) + r"\s*\d_.*?_.*$|^BD-.*$|^Add_.*$)"
 
             market_match = re.search(
                 market_pattern_combined,
@@ -100,7 +100,7 @@ def get_market_and_zone_name_from_ppt(ppt_path):
                 print(f"DEBUG: Found new market name: {market_name}")
             else:
                 print(
-                    "Could not find a string starting with '{zone_name}' followed by a space and a digit, with at least two underscores, or a string starting with 'BD-'.")
+                    "Could not find a string starting with '{zone_name}' followed by a space and a digit, with at least two underscores, or a string starting with 'BD-' or 'Add_'.")
         if market_name is None:
             print(f"DEBUG: Extracted slide text:\n---START---\n{slide_text}\n---END---")
         return market_name, zone_name
