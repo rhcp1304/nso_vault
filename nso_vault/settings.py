@@ -39,7 +39,8 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'uploader',
     'video_processor',
-    'video_converter'
+    'video_converter',
+    'drive_uploader'
 ]
 
 MIDDLEWARE = [
