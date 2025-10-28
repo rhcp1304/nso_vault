@@ -8,36 +8,34 @@ import shutil
 import json
 from io import BytesIO
 import quopri
-
+import hashlib
+import time
+import random
 from django.shortcuts import render
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
-
 from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 from pptx import Presentation
 
-# --- Configuration ---
-# BASE_DIR should point to the project root (e.g., nso_vault/)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CREDENTIALS_FILE = os.path.join(BASE_DIR, 'bdstorage_credentials.json')
 TOKEN_FILE_PATH = os.path.join(BASE_DIR, 'token.pickle')
+HASH_DB_FILE = os.path.join(BASE_DIR, 'uploaded_ppt_hashes.json')
 
 SCOPES = [
     'https://www.googleapis.com/auth/drive',
     'https://www.googleapis.com/auth/gmail.readonly'
 ]
 
-DEFAULT_DRIVE_FILENAME = "Linked_Drive_Presentation"
 DRIVE_ID_BYTE_PATTERN = re.compile(b'/d/([a-zA-Z0-9_-]+)')
 
 
-# --- Google API Authentication (No Changes) ---
+
 def authenticate_google_services():
     """Authenticates for both Drive and Gmail APIs using a single flow."""
     creds = None
@@ -77,24 +75,74 @@ def authenticate_google_services():
         return None, None
 
 
-# --- General Helpers (normalize_filename is no longer used in the main flow) ---
+def api_call_with_backoff(api_func, **kwargs):
+    """
+    Wraps an API call with exponential backoff for retrying on 429 (Rate Limit) errors.
+    """
+    MAX_RETRIES = 5
+    for attempt in range(MAX_RETRIES):
+        try:
+            return api_func(**kwargs).execute()
+
+        except HttpError as error:
+            if error.resp.status in (429, 500, 503):
+                if attempt + 1 == MAX_RETRIES:
+                    print(f"🛑 API FAILED after {MAX_RETRIES} retries due to {error.resp.status}.")
+                    raise
+
+                sleep_time = (2 ** attempt) + (random.random() * 0.1)
+
+                print(
+                    f"🛑 API Error {error.resp.status} hit. Retrying in {sleep_time:.2f} seconds... (Attempt {attempt + 1}/{MAX_RETRIES})")
+                time.sleep(sleep_time)
+                continue
+            raise
+
+        except Exception as e:
+            raise
+
+    raise Exception("API call failed unexpectedly.")
+
 
 def normalize_filename(filename):
-    """
-    Strips common version/copy suffixes to find the base name for replacement.
-    (Kept for compatibility with other parts of the code)
-    """
+    """Strips common version/copy suffixes. Kept for link parsing."""
     PATTERN = r'(\s*\(\d+\)|\s+_\d+|\s+-\s*copy|\s+copy|\s+\d+|\s+v\d+)$'
     base_name, ext = os.path.splitext(filename)
     cleaned_name = re.sub(PATTERN, '', base_name, flags=re.IGNORECASE).strip()
     return cleaned_name + ext
 
 
-# --- Gmail Specific Functions (No Changes) ---
+def get_file_hash(file_path):
+    """Calculates the SHA-256 hash of a file's content."""
+    hasher = hashlib.sha256()
+    with open(file_path, 'rb') as file:
+        for chunk in iter(lambda: file.read(4096), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def load_hashes():
+    """Loads the persistent hash map from the JSON file."""
+    if os.path.exists(HASH_DB_FILE):
+        with open(HASH_DB_FILE, 'r') as f:
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                return {}
+    return {}
+
+
+def save_hashes(hash_map):
+    """Saves the persistent hash map to the JSON file."""
+    with open(HASH_DB_FILE, 'w') as f:
+        json.dump(hash_map, f, indent=4)
+
+
 
 def get_messages_with_ppt(service, user_id='me'):
     """
     Fetches messages using the absolute broadest query possible (date only).
+    Uses backoff for list call.
     """
     date_two_days_ago = datetime.now() - timedelta(days=2)
     date_query = date_two_days_ago.strftime('%Y/%m/%d')
@@ -105,11 +153,12 @@ def get_messages_with_ppt(service, user_id='me'):
         messages = []
         page_token = None
         while True:
-            response = service.users().messages().list(
+            response = api_call_with_backoff(
+                service.users().messages().list,
                 userId=user_id,
                 q=query,
                 pageToken=page_token
-            ).execute()
+            )
             messages.extend(response.get('messages', []))
             page_token = response.get('nextPageToken')
             if not page_token:
@@ -117,19 +166,13 @@ def get_messages_with_ppt(service, user_id='me'):
         messages.reverse()
         return messages
 
-    except HttpError as error:
-        print(f'An HTTP error occurred while listing messages: {error}')
-        return []
     except Exception as e:
-        print(f'An unexpected error occurred: {e}')
+        print(f'An error occurred while listing messages, potentially after retries: {e}')
         return []
 
 
 def get_attachment_parts_recursively(parts):
-    """
-    Recursively searches all parts of a Gmail message for ANY part that has
-    an attachmentId, accepting all physical attachments for processing.
-    """
+    """Recursively searches all parts of a Gmail message for any physical attachment."""
     all_file_parts = []
     if not parts:
         return all_file_parts
@@ -143,9 +186,7 @@ def get_attachment_parts_recursively(parts):
 
 
 def find_all_drive_links(message_payload):
-    """
-    Aggressively searches the entire message payload for ALL unique Drive file IDs.
-    """
+    """Aggressively searches the entire message payload for ALL unique Drive file IDs."""
     found_links = []
 
     def recursive_link_search(parts):
@@ -195,10 +236,7 @@ def find_all_drive_links(message_payload):
 
 
 def download_file_from_drive(drive_service, file_id, file_name, temp_dir_base):
-    """
-    Downloads a file from Google Drive based on its ID.
-    The file_name provided is already unique (ID-based).
-    """
+    """Downloads a file from Google Drive based on its ID."""
     clean_file_name = file_name.strip()
     if not clean_file_name.lower().endswith('.pptx'):
         clean_file_name = os.path.splitext(clean_file_name)[0].strip() + '.pptx'
@@ -239,6 +277,7 @@ def download_file_from_drive(drive_service, file_id, file_name, temp_dir_base):
 def download_attachment(drive_service, gmail_service, msg_id, user_id='me'):
     """
     Downloads ALL physical attachments AND ALL linked Drive files from one email.
+    Uses backoff for message and attachment get calls.
     """
     downloaded_files = []
     message = None
@@ -247,13 +286,18 @@ def download_attachment(drive_service, gmail_service, msg_id, user_id='me'):
 
     try:
         temp_dir_base = tempfile.mkdtemp()
-        message = gmail_service.users().messages().get(userId=user_id, id=msg_id, format='full').execute()
+
+        # Use backoff for the message.get API call
+        message = api_call_with_backoff(
+            gmail_service.users().messages().get,
+            userId=user_id, id=msg_id, format='full'
+        )
+
         payload = message.get('payload')
         if not payload:
             print(f"WARNING: Message ID {msg_id} retrieved but has no payload. Skipping.")
             return downloaded_files, message
 
-        # --- 1. DRIVE LINK CHECK: Find and Download ALL Drive links ---
         all_drive_links = find_all_drive_links(payload)
 
         for drive_file_id, drive_file_name in all_drive_links:
@@ -267,8 +311,6 @@ def download_attachment(drive_service, gmail_service, msg_id, user_id='me'):
                     'temp_dir': temp_dir_base
                 })
 
-        # --- 2. PHYSICAL ATTACHMENT CHECK: Find and Download ALL Physical attachments ---
-
         all_file_parts = get_attachment_parts_recursively(payload.get('parts', []))
 
         for part in all_file_parts:
@@ -279,9 +321,10 @@ def download_attachment(drive_service, gmail_service, msg_id, user_id='me'):
             attachment_ids_processed.add(attachment_id)
 
             try:
-                att_data = gmail_service.users().messages().attachments().get(
+                att_data = api_call_with_backoff(
+                    gmail_service.users().messages().attachments().get,
                     userId=user_id, messageId=msg_id, id=attachment_id
-                ).execute()
+                )
 
                 data = att_data.get('data')
                 file_data = base64.urlsafe_b64decode(data.encode('UTF-8'))
@@ -310,7 +353,8 @@ def download_attachment(drive_service, gmail_service, msg_id, user_id='me'):
                     'temp_dir': temp_dir_base
                 })
             except Exception as e:
-                print(f"Error downloading physical attachment {attachment_id} for {msg_id}: {e}")
+                # Note: If the backoff fails, it will print a final error here.
+                print(f"Error downloading physical attachment {attachment_id} for {msg_id} (after retries): {e}")
                 continue
 
         return downloaded_files, message
@@ -327,12 +371,8 @@ def download_attachment(drive_service, gmail_service, msg_id, user_id='me'):
         pass
 
 
-# --- PPT Processing Functions (No Changes) ---
-
 def get_market_and_zone_name_from_ppt(ppt_path):
-    """
-    Extracts market and zone names from the first slide of the PPT.
-    """
+    """Extracts market and zone names from the first slide of the PPT."""
     market_name = None
     zone_name = None
     slide_text = ""
@@ -348,7 +388,6 @@ def get_market_and_zone_name_from_ppt(ppt_path):
                 for paragraph in shape.text_frame.paragraphs:
                     slide_text += paragraph.text + "\n"
 
-        # 1. Search for ZONE
         zone_match = re.search(
             r"ZONE\s*:\s*(.*?)(?:\s*STATE|\s*CITY|\s*PIN CODE|$)",
             slide_text,
@@ -361,7 +400,6 @@ def get_market_and_zone_name_from_ppt(ppt_path):
             print("EXTRACTION FAIL: Could not find 'ZONE : ' pattern on the first slide.")
             return None, None
 
-        # 2. Search for MARKET
         if zone_name:
             market_pattern_combined = r"(?:^" + re.escape(zone_name) + r"\s*\d_.*?_.*$|^BD-.*$|^Add_.*$)"
 
@@ -381,8 +419,6 @@ def get_market_and_zone_name_from_ppt(ppt_path):
         print(f"An error occurred while reading the PPT: {e}")
         return None, None
 
-
-# --- Drive Operations (Folder Functions No Changes) ---
 
 def create_drive_folder(service, folder_name, parent_folder_id):
     """Creates a new folder."""
@@ -423,8 +459,6 @@ def find_or_create_folder(service, folder_name, parent_folder_id):
         return None
 
 
-# --- Drive Operations (Modified Replacement Logic) ---
-
 def strict_replace_file_in_drive(service, file_path, desired_filename, parent_folder_id):
     """
     CORE LOGIC: Deletes any existing file with the DESIRED_FILENAME in the folder,
@@ -433,7 +467,6 @@ def strict_replace_file_in_drive(service, file_path, desired_filename, parent_fo
     final_drive_name = desired_filename
     old_file_id = None
 
-    # --- Step 1: Search Drive for Old File by FINAL_DRIVE_NAME and Folder ID ---
     try:
         query = (
             f"name='{final_drive_name}' and "
@@ -454,7 +487,6 @@ def strict_replace_file_in_drive(service, file_path, desired_filename, parent_fo
     except Exception as e:
         print(f"Error searching for existing file '{final_drive_name}': {e}")
 
-    # --- Step 2: Delete Old File (Strict Replacement) ---
     if old_file_id:
         try:
             service.files().delete(fileId=old_file_id).execute()
@@ -462,7 +494,6 @@ def strict_replace_file_in_drive(service, file_path, desired_filename, parent_fo
         except Exception as e:
             print(f"Error deleting old file {old_file_id}: {e}. Proceeding with upload.")
 
-    # --- Step 3: Create New File (Upload Latest) ---
     print(f"✅ UPLOADING NEW FILE: '{final_drive_name}'")
 
     file_metadata = {
@@ -489,18 +520,27 @@ def strict_replace_file_in_drive(service, file_path, desired_filename, parent_fo
         return None
 
 
-# --- Main Processing Logic (Modified) ---
-
-def main_processor(ppt_file_path, original_file_name, parent_folder_id, drive_service):
+def main_processor(ppt_file_path, original_file_name, parent_folder_id, drive_service, uploaded_hashes):
     """
     Processes the PPT, determines the target folders (Zone/Market),
     and uploads the file, ensuring the file name matches the Market folder name.
+
+    Includes HASH CHECK logic to skip the entire upload if content is unchanged.
     """
     market_name, zone_name = get_market_and_zone_name_from_ppt(ppt_file_path)
     if not market_name:
         return {'error': 'Could not extract market name. Folder not created and PPT not uploaded.'}
 
-    # 1. Determine Zone Folder ID
+    desired_drive_filename = market_name + '.pptx'
+
+    current_file_hash = get_file_hash(ppt_file_path)
+
+    if uploaded_hashes.get(desired_drive_filename) == current_file_hash:
+        print(f"⏩ SKIPPING UPLOAD: Content for '{desired_drive_filename}' is unchanged based on hash.")
+        return {'message': 'File skipped. Content is identical to the last uploaded version.',
+                'file_id': None,
+                'skipped': True}
+
     target_parent_for_market = parent_folder_id
     if zone_name:
         zone_folder_id = find_or_create_folder(drive_service, zone_name, parent_folder_id)
@@ -509,34 +549,27 @@ def main_processor(ppt_file_path, original_file_name, parent_folder_id, drive_se
         else:
             print("Failed to find or create Zone folder. Market folder will be created directly under the main parent.")
 
-    # 2. Determine Market Folder ID (The final destination)
     market_folder_id = find_or_create_folder(drive_service, market_name, target_parent_for_market)
     if not market_folder_id:
         return {'error': f"Failed to create Market folder '{market_name}'. PPT file not uploaded."}
 
-    # 3. CRITICAL: Define the final desired file name (Folder Name + .pptx)
-    desired_drive_filename = market_name + '.pptx'
-
-    # 4. Perform Strict Replacement Upload
     uploaded_file_id = strict_replace_file_in_drive(
         drive_service,
         ppt_file_path,
-        desired_drive_filename,  # <-- File name is now guaranteed to match folder name
+        desired_drive_filename,
         market_folder_id
     )
 
     if uploaded_file_id:
+        uploaded_hashes[desired_drive_filename] = current_file_hash
         return {'message': 'File uploaded and organized successfully!', 'file_id': uploaded_file_id}
     else:
         return {'error': 'Failed to upload/replace PPT file to the drive.'}
 
 
-# --- Django Views (No Changes) ---
 
 def trigger_email_check_page(request):
-    """
-    Renders the HTML form to trigger the email check.
-    """
+    """Renders the HTML form to trigger the email check."""
     return render(request, 'drive_uploader/email_trigger.html')
 
 
@@ -551,27 +584,26 @@ def check_email_and_upload(request):
     if not parent_folder_id:
         return JsonResponse({'error': 'Missing parent folder ID.'}, status=400)
 
-    # 1. Authenticate
     drive_service, gmail_service = authenticate_google_services()
     if not drive_service or not gmail_service:
         return JsonResponse({'error': 'Google API authentication failed. Check credentials/token.'}, status=500)
 
-    # 2. Fetch messages
+    uploaded_hashes = load_hashes()
+
     messages = get_messages_with_ppt(gmail_service)
 
     if not messages:
+        save_hashes(uploaded_hashes)
         return JsonResponse({'message': 'No relevant emails found in the search window.'}, status=200)
 
     all_results = []
     dirs_to_cleanup = set()
 
-    # 3. Process each message
     for message in messages:
         msg_id = message['id']
 
         downloaded_files, full_message_payload = download_attachment(drive_service, gmail_service, msg_id)
 
-        # 4. Process all found/downloaded files
         if downloaded_files:
             temp_dir_to_clean = downloaded_files[0]['temp_dir']
             dirs_to_cleanup.add(temp_dir_to_clean)
@@ -581,7 +613,13 @@ def check_email_and_upload(request):
                 original_filename = file_data['filename']
 
                 try:
-                    result = main_processor(temp_file_path, original_filename, parent_folder_id, drive_service)
+                    result = main_processor(
+                        temp_file_path,
+                        original_filename,
+                        parent_folder_id,
+                        drive_service,
+                        uploaded_hashes
+                    )
 
                     result['source_email_id'] = msg_id
                     result['source_filename'] = original_filename
@@ -599,7 +637,8 @@ def check_email_and_upload(request):
                 'source_email_id': msg_id
             })
 
-    # 5. Clean up ALL temporary files and directories
+    save_hashes(uploaded_hashes)
+
     for temp_dir in dirs_to_cleanup:
         try:
             if os.path.exists(temp_dir):
