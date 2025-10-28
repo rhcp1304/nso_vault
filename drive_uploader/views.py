@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import shutil
 import json
 from io import BytesIO
-import quopri  # 🛑 CRITICAL: Import for quoted-printable decoding
+import quopri
 
 from django.shortcuts import render
 from django.http import JsonResponse
@@ -15,6 +15,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -32,9 +33,8 @@ SCOPES = [
     'https://www.googleapis.com/auth/gmail.readonly'
 ]
 
-# Drive Link Pattern: Simplified to reliably find the ID after /d/
-DRIVE_ID_PATTERN = re.compile(r'/d/([a-zA-Z0-9_-]+)')
-DEFAULT_DRIVE_FILENAME = "Linked_Drive_Presentation.pptx"
+DEFAULT_DRIVE_FILENAME = "Linked_Drive_Presentation"
+DRIVE_ID_BYTE_PATTERN = re.compile(b'/d/([a-zA-Z0-9_-]+)')
 
 
 # --- Google API Authentication ---
@@ -46,16 +46,13 @@ def authenticate_google_services():
         try:
             with open(TOKEN_FILE_PATH, 'rb') as token:
                 creds = pickle.load(token)
-            # print("Loaded API credentials from token file.")
         except Exception:
             creds = None
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            # print("Credentials expired, refreshing...")
             creds.refresh(Request())
         else:
-            # print(f"Initiating new authentication flow using {CREDENTIALS_FILE}...")
             if not os.path.exists(CREDENTIALS_FILE):
                 raise FileNotFoundError(
                     f"Credentials file not found at {CREDENTIALS_FILE}. Please ensure it's there.")
@@ -69,7 +66,6 @@ def authenticate_google_services():
         try:
             with open(TOKEN_FILE_PATH, 'wb') as token:
                 pickle.dump(creds, token)
-            # print(f"API credentials saved to {TOKEN_FILE_PATH}.")
         except Exception as e:
             print(f"Failed to save API token: {e}")
 
@@ -90,11 +86,7 @@ def get_messages_with_ppt(service, user_id='me'):
     """
     date_two_days_ago = datetime.now() - timedelta(days=2)
     date_query = date_two_days_ago.strftime('%Y/%m/%d')
-
-    # 🛑 CRITICAL FIX: Use the broadest query: date only.
     query = f'after:{date_query} AND NOT is:chat'
-    # If this fails, the email is older than 48 hours.
-
     print(f"Searching Gmail with query: '{query}'")
 
     try:
@@ -106,12 +98,10 @@ def get_messages_with_ppt(service, user_id='me'):
                 q=query,
                 pageToken=page_token
             ).execute()
-
             messages.extend(response.get('messages', []))
             page_token = response.get('nextPageToken')
             if not page_token:
                 break
-
         messages.reverse()
         return messages
 
@@ -122,45 +112,33 @@ def get_messages_with_ppt(service, user_id='me'):
         print(f'An unexpected error occurred: {e}')
         return []
 
+
 def get_attachment_parts_recursively(parts):
     """
     Recursively searches all parts of a Gmail message for ANY part that has
     an attachmentId, accepting all physical attachments for processing.
     """
     all_file_parts = []
-
     if not parts:
         return all_file_parts
-
     for part in parts:
-        # The definitive check for a downloadable physical attachment
         attachment_id = part.get('body', {}).get('attachmentId')
-
-        # Accepting all attachments with an ID, letting the PPTX reader filter non-PPTs.
         if attachment_id:
             all_file_parts.append(part)
-
-        # Recursively check nested parts
         if 'parts' in part:
             all_file_parts.extend(get_attachment_parts_recursively(part['parts']))
-
     return all_file_parts
 
 
-def extract_drive_link(message_payload):
+def find_all_drive_links(message_payload):
     """
-    Final, aggressive, byte-level search for the Drive file ID.
-    This bypasses most text decoding and regex issues.
+    Aggressively searches the entire message payload for ALL unique Drive file IDs.
+    CRITICAL FIX: Guarantees unique filename by using the Drive ID.
     """
-    if not message_payload:
-        return None, None
-
-    # Simple, non-greedy ID pattern to use in bytes
-    DRIVE_ID_BYTE_PATTERN = re.compile(b'/d/([a-zA-Z0-9_-]+)')
+    found_links = []
 
     def recursive_link_search(parts):
-        if not parts:
-            return None, None
+        if not parts: return
 
         for part in parts:
             encoding = next(
@@ -173,70 +151,64 @@ def extract_drive_link(message_payload):
                     decoded_bytes = base64.urlsafe_b64decode(data.encode('UTF-8'))
 
                     if 'quoted-printable' in encoding:
-                        # Un-encode the bytes if necessary
                         decoded_bytes = quopri.decodestring(decoded_bytes)
 
-                    # 1. CRITICAL: Search for the ID directly in the raw decoded bytes
-                    match_id_in_bytes = DRIVE_ID_BYTE_PATTERN.search(decoded_bytes)
-
-                    if match_id_in_bytes:
+                    for match_id_in_bytes in DRIVE_ID_BYTE_PATTERN.finditer(decoded_bytes):
                         file_id = match_id_in_bytes.group(1).decode('utf-8')
 
-                        # 2. Extract Filename (soft attempt in text)
+                        # --- CRITICAL FIX START ---
+                        # Default to ID as the name
+                        filename = f"{file_id}.pptx"
+
+                        # Attempt to prepend a descriptive name if found, but keep the unique ID
                         try:
-                            # Use soft decoding just to try and find the filename
                             decoded_data = decoded_bytes.decode('utf-8', errors='ignore')
                             filename_match = re.search(r'([a-zA-Z0-9_ -]+\.pptx)', decoded_data, re.IGNORECASE)
-                            filename = filename_match.group(1).strip() if filename_match else DEFAULT_DRIVE_FILENAME
-
+                            if filename_match:
+                                raw_name = filename_match.group(1).strip().replace(".pptx", "")
+                                filename = f"{raw_name}_{file_id}.pptx"
                         except:
-                            filename = DEFAULT_DRIVE_FILENAME
+                            pass
+                        # --- CRITICAL FIX END ---
 
-                        print(f"✅ FINAL BYTE-LEVEL FOUND: ID={file_id}, Filename={filename}")
-                        return file_id, filename
+                        link_tuple = (file_id, filename)
+                        if link_tuple not in found_links:
+                            found_links.append(link_tuple)
+                            print(f"✅ FINAL BYTE-LEVEL FOUND: ID={file_id}, Unique Filename={filename}")
 
                 except Exception as e:
-                    # print(f"Warning: Failed to process part data in byte search: {e}")
                     pass
 
             if 'parts' in part:
-                file_id, filename = recursive_link_search(part['parts'])
-                if file_id:
-                    return file_id, filename
+                recursive_link_search(part['parts'])
 
-        return None, None
-
-    return recursive_link_search(message_payload.get('parts', []))
+    recursive_link_search(message_payload.get('parts', []))
+    return found_links
 
 
 def download_file_from_drive(drive_service, file_id, file_name, temp_dir_base):
     """
-    Downloads a file from Google Drive based on its ID with robust error logging.
+    Downloads a file from Google Drive based on its ID.
+    The file_name provided is already unique (ID-based).
     """
-    # 1. Ensure .pptx extension is present and clean the filename
     clean_file_name = file_name.strip()
     if not clean_file_name.lower().endswith('.pptx'):
-        # Ensure only one .pptx extension exists
         clean_file_name = os.path.splitext(clean_file_name)[0].strip() + '.pptx'
 
-    # 2. Use a safe filename for the local disk (removes characters that might cause OS issues)
+    # Use the name exactly as provided (since it is already unique ID-based)
     safe_file_name = re.sub(r'[^\w\-_\. ()]', '_', clean_file_name)
+    file_path = os.path.join(temp_dir_base, safe_file_name)
 
     try:
-        # Request the media content
         request = drive_service.files().get_media(fileId=file_id)
-        file_path = os.path.join(temp_dir_base, safe_file_name)
-
-        # Download the file to a buffer (BytesIO)
         fh = BytesIO()
         downloader = MediaIoBaseDownload(fh, request)
         done = False
-        print(f"DIAGNOSTIC: Attempting Drive download for ID: {file_id}, Filename: {safe_file_name}")
+        print(f"DIAGNOSTIC: Attempting Drive download for ID: {file_id}, Saving as: {safe_file_name}")
 
         while done is False:
             status, done = downloader.next_chunk()
 
-        # Write the buffer content to the local file
         with open(file_path, 'wb') as f:
             f.write(fh.getvalue())
 
@@ -244,7 +216,6 @@ def download_file_from_drive(drive_service, file_id, file_name, temp_dir_base):
         return file_path
 
     except HttpError as error:
-        # 🛑 CRITICAL: Capture the exact Drive API error
         error_details = error.content.decode('utf-8', errors='ignore')
         print("\n-------------------------------------------------------------")
         print(f'🛑 DRIVE API ERROR: The file was likely found but DOWNLOAD FAILED.')
@@ -260,7 +231,7 @@ def download_file_from_drive(drive_service, file_id, file_name, temp_dir_base):
 
 def download_attachment(drive_service, gmail_service, msg_id, user_id='me'):
     """
-    Downloads ALL physical attachments OR the single linked Drive file.
+    Downloads ALL physical attachments AND ALL linked Drive files from one email.
     """
     downloaded_files = []
     message = None
@@ -268,90 +239,83 @@ def download_attachment(drive_service, gmail_service, msg_id, user_id='me'):
 
     try:
         temp_dir_base = tempfile.mkdtemp()
-
-        # Attempt to retrieve the full message
         message = gmail_service.users().messages().get(userId=user_id, id=msg_id, format='full').execute()
-
-        # CRITICAL CHECK: Ensure the message has a payload
         payload = message.get('payload')
         if not payload:
             print(f"WARNING: Message ID {msg_id} retrieved but has no payload. Skipping.")
             return downloaded_files, message
 
-        # --- 1. DRIVE LINK CHECK (FIRST PRIORITY) ---
-        drive_file_id, drive_file_name = extract_drive_link(payload)
+        # --- 1. DRIVE LINK CHECK: Find and Download ALL Drive links ---
+        all_drive_links = find_all_drive_links(payload)
 
-        if drive_file_id:
-            # Found a Drive link, download it directly using the Drive service
+        for drive_file_id, drive_file_name in all_drive_links:
+            # drive_file_name is now guaranteed to be unique (ID-based)
             file_path = download_file_from_drive(
                 drive_service, drive_file_id, drive_file_name, temp_dir_base
             )
             if file_path:
                 downloaded_files.append({
                     'path': file_path,
-                    'filename': drive_file_name,
+                    'filename': os.path.basename(file_path),
                     'temp_dir': temp_dir_base
                 })
-            # 🛑 CRITICAL: RETURN HERE to prevent physical attachment check on Drive-linked files
-            return downloaded_files, message
 
-        # --- 2. PHYSICAL ATTACHMENT CHECK (SECOND PRIORITY) ---
+        # --- 2. PHYSICAL ATTACHMENT CHECK: Find and Download ALL Physical attachments ---
 
-        # Search for all parts with an attachmentId
         all_file_parts = get_attachment_parts_recursively(payload.get('parts', []))
 
         for part in all_file_parts:
             attachment_id = part['body']['attachmentId']
 
-            att_data = gmail_service.users().messages().attachments().get(
-                userId=user_id, messageId=msg_id, id=attachment_id
-            ).execute()
+            try:
+                att_data = gmail_service.users().messages().attachments().get(
+                    userId=user_id, messageId=msg_id, id=attachment_id
+                ).execute()
 
-            data = att_data.get('data')
-            file_data = base64.urlsafe_b64decode(data.encode('UTF-8'))
+                data = att_data.get('data')
+                file_data = base64.urlsafe_b64decode(data.encode('UTF-8'))
 
-            # Use the filename provided by the API
-            filename = part.get('filename')
+                filename_base = part.get('filename') or f"attachment_part_{attachment_id}.pptx"
+                if not os.path.splitext(filename_base)[1]: filename_base += '.pptx'
 
-            # Robust filename fallback and extension guarantee
-            if not filename:
-                filename = f"missing_name_{msg_id}_part{attachment_id}.pptx"
-            elif not os.path.splitext(filename)[1]:
-                filename += '.pptx'
+                # CRITICAL FIX: Ensure local filename uniqueness for physical attachments
+                # (in case the sender names two attachments the same)
+                base_name, ext = os.path.splitext(filename_base)
+                counter = 1
+                safe_file_name = filename_base
+                temp_file_path = os.path.join(temp_dir_base, safe_file_name)
 
-            temp_file_path = os.path.join(temp_dir_base, filename)
+                while os.path.exists(temp_file_path):
+                    safe_file_name = f"{base_name} ({counter}){ext}"
+                    temp_file_path = os.path.join(temp_dir_base, safe_file_name)
+                    counter += 1
 
-            with open(temp_file_path, 'wb') as f:
-                f.write(file_data)
+                with open(temp_file_path, 'wb') as f:
+                    f.write(file_data)
 
-            print(f"Downloaded attachment: {filename} (ID: {attachment_id}).")
+                print(f"Downloaded physical attachment: {safe_file_name} (ID: {attachment_id}).")
 
-            downloaded_files.append({
-                'path': temp_file_path,
-                'filename': filename,
-                'temp_dir': temp_dir_base
-            })
+                downloaded_files.append({
+                    'path': temp_file_path,
+                    'filename': safe_file_name,
+                    'temp_dir': temp_dir_base
+                })
+            except Exception as e:
+                print(f"Error downloading physical attachment {attachment_id} for {msg_id}: {e}")
+                continue
 
-        return downloaded_files, message  # Final successful return
+        return downloaded_files, message
 
     except HttpError as error:
-        # Diagnostic Printout
         print(f'API ERROR for ID {msg_id}. Status: {error.resp.status}. Details: {error.content.decode()}')
         return [], message
 
     except Exception as e:
-        # Catches unexpected errors
         print(f'An UNEXPECTED error occurred during message processing for ID {msg_id}: {e}')
         return [], message
 
     finally:
-        # 🛑 Make cleanup SAFE by wrapping it in its own try/except 🛑
-        if not downloaded_files and temp_dir_base and os.path.exists(temp_dir_base):
-            try:
-                shutil.rmtree(temp_dir_base)
-            except Exception as cleanup_e:
-                # Log the cleanup failure but let the function proceed with its intended return
-                print(f"WARNING: Failed to cleanup temp directory {temp_dir_base} for ID {msg_id}: {cleanup_e}")
+        pass
 
 
 # --- PPT Processing Functions ---
@@ -401,8 +365,7 @@ def get_market_and_zone_name_from_ppt(ppt_path):
                 market_name = market_match.group(0).strip()
                 market_name = re.sub(r'\s*\[Image \d+\]\s*', '', market_name).strip()
             else:
-                print(
-                    f"EXTRACTION FAIL: Found ZONE: '{zone_name}', but MARKET name did not match expected patterns.")
+                print(f"EXTRACTION FAIL: Found ZONE: '{zone_name}', but MARKET name did not match expected patterns.")
 
         return market_name, zone_name
     except Exception as e:
@@ -424,9 +387,6 @@ def create_drive_folder(service, folder_name, parent_folder_id):
         return file.get('id')
     except HttpError as error:
         print(f"An HTTP error occurred during folder creation: {error}")
-        return None
-    except Exception as e:
-        print(f"An unexpected error occurred during folder creation: {e}")
         return None
 
 
@@ -452,18 +412,19 @@ def find_or_create_folder(service, folder_name, parent_folder_id):
     except HttpError as error:
         print(f"An HTTP error occurred while finding/creating folder '{folder_name}': {error}")
         return None
-    except Exception as e:
-        print(f"An unexpected error occurred while finding/creating folder '{folder_name}': {e}")
-        return None
 
 
 def upload_file_to_drive(service, file_path, parent_folder_id):
     """
-    Uploads a file to Drive, replacing an existing file with the same name
-    in the same folder if one is found.
+    Uploads a file to Drive. Because the local file_name is now unique (ID-based),
+    it will create a new file on Drive unless a file with that exact name already exists.
     """
     file_name = os.path.basename(file_path)
     existing_file_id = None
+
+    # 🛑 The search query is CRITICAL: it ensures that IF a file with the
+    # guaranteed unique name already exists in the target folder, it is replaced.
+    # This prevents duplicate files if the script is re-run.
     try:
         query = (
             f"name = '{file_name}' and "
@@ -486,7 +447,6 @@ def upload_file_to_drive(service, file_path, parent_folder_id):
         existing_file_id = None
 
     try:
-        # Use MediaFileUpload for efficient upload
         media = MediaFileUpload(file_path, resumable=True)
 
         if existing_file_id:
@@ -495,6 +455,7 @@ def upload_file_to_drive(service, file_path, parent_folder_id):
                 media_body=media,
                 fields='id'
             ).execute()
+            print(f"File updated successfully (ID: {existing_file_id}, Name: {file_name}).")
         else:
             file_metadata = {
                 'name': file_name,
@@ -505,14 +466,12 @@ def upload_file_to_drive(service, file_path, parent_folder_id):
                 media_body=media,
                 fields='id'
             ).execute()
+            print(f"File uploaded successfully (New ID: {file.get('id')}, Name: {file_name}).")
 
         return file.get('id')
 
     except HttpError as error:
         print(f"An HTTP error occurred during upload/update: {error}")
-        return None
-    except Exception as e:
-        print(f"An unexpected error occurred during upload/update: {e}")
         return None
 
 
@@ -523,14 +482,9 @@ def main_processor(ppt_file_path, parent_folder_id, drive_service):
     Processes the PPT, determines the target folders (Zone/Market),
     and uploads the file, replacing existing ones if necessary.
     """
-    # print("Starting PPT processing and folder organization...")
-
     market_name, zone_name = get_market_and_zone_name_from_ppt(ppt_file_path)
     if not market_name:
         return {'error': 'Could not extract market name. Folder not created and PPT not uploaded.'}
-
-    # print(f"Extracted Market Name: {market_name}")
-    # print(f"Extracted Zone Name: {zone_name}")
 
     target_parent_for_market = parent_folder_id
     if zone_name:
@@ -546,10 +500,8 @@ def main_processor(ppt_file_path, parent_folder_id, drive_service):
 
     uploaded_file_id = upload_file_to_drive(drive_service, ppt_file_path, market_folder_id)
     if uploaded_file_id:
-        # print("PPT file uploaded/replaced and placed in the correct folder.")
         return {'message': 'File uploaded and organized successfully!', 'file_id': uploaded_file_id}
     else:
-        print("Failed to upload/replace PPT file to the drive.")
         return {'error': 'Failed to upload/replace PPT file to the drive.'}
 
 
@@ -566,8 +518,7 @@ def trigger_email_check_page(request):
 @require_http_methods(["POST"])
 def check_email_and_upload(request):
     """
-    Checks Gmail for ANY message with an attachment in the last 48 hours and
-    attempts to process all identified attachments/linked Drive files as PPTs.
+    Checks Gmail for relevant messages and processes ALL attachments/linked files.
     """
     parent_folder_id = request.POST.get('parent_folder_id')
 
@@ -586,36 +537,30 @@ def check_email_and_upload(request):
         return JsonResponse({'message': 'No relevant emails found in the search window.'}, status=200)
 
     all_results = []
-    # Use a set to track directories to clean, avoiding duplicates
     dirs_to_cleanup = set()
 
     # 3. Process each message
     for message in messages:
         msg_id = message['id']
 
-        # ATTEMPT: Download all identifiable attachments OR Drive links
         downloaded_files, full_message_payload = download_attachment(drive_service, gmail_service, msg_id)
 
         # 4. Process all found/downloaded files
         if downloaded_files:
-            # All downloaded files share the same temp directory
             temp_dir_to_clean = downloaded_files[0]['temp_dir']
-            dirs_to_cleanup.add(temp_dir_to_clean)  # Add the base dir for cleanup
+            dirs_to_cleanup.add(temp_dir_to_clean)
 
             for file_data in downloaded_files:
                 temp_file_path = file_data['path']
-                filename = file_data['filename']
+                filename = file_data['filename']  # This is now the unique name
 
-                # Attempt to process ANY file, relying on the PPTX library to confirm the format
                 try:
                     result = main_processor(temp_file_path, parent_folder_id, drive_service)
 
-                    # If processing succeeds, the file was a valid PPTX/PPT
                     result['source_email_id'] = msg_id
                     result['source_filename'] = filename
                     all_results.append(result)
                 except Exception as e:
-                    # Log files that could not be read as a PPT/PPTX
                     result = {
                         'error': f'File skipped. Could not be read as PPTX/PPT. Exception: {e}',
                         'source_email_id': msg_id,
@@ -631,8 +576,6 @@ def check_email_and_upload(request):
     # 5. Clean up ALL temporary files and directories
     for temp_dir in dirs_to_cleanup:
         try:
-            # We clean the directory regardless of whether the processing succeeded,
-            # as the file was already uploaded to Drive.
             if os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
 
@@ -640,5 +583,5 @@ def check_email_and_upload(request):
             print(f"Warning: Failed to cleanup temp directory {temp_dir}: {e}")
 
     return JsonResponse({
-                            'message': f'Email processing complete. {len(all_results)} files processed from {len(messages)} emails. Results attached.',
-                            'results': all_results}, status=200)
+        'message': f'Email processing complete. {len(all_results)} files processed from {len(messages)} emails. Results attached.',
+        'results': all_results}, status=200)
