@@ -37,8 +37,7 @@ DEFAULT_DRIVE_FILENAME = "Linked_Drive_Presentation"
 DRIVE_ID_BYTE_PATTERN = re.compile(b'/d/([a-zA-Z0-9_-]+)')
 
 
-# --- Google API Authentication ---
-
+# --- Google API Authentication (No Changes) ---
 def authenticate_google_services():
     """Authenticates for both Drive and Gmail APIs using a single flow."""
     creds = None
@@ -78,27 +77,20 @@ def authenticate_google_services():
         return None, None
 
 
-# --- General Helpers ---
+# --- General Helpers (normalize_filename is no longer used in the main flow) ---
 
 def normalize_filename(filename):
     """
     Strips common version/copy suffixes to find the base name for replacement.
-    E.g., 'BD_Presentation (1).pptx' -> 'BD_Presentation.pptx'
+    (Kept for compatibility with other parts of the code)
     """
-    # Define a robust pattern to strip common suffixes like ' (1)', '_1', ' - Copy', etc.
-    # The pattern targets parentheses with numbers, underscores with numbers, or ' copy'
     PATTERN = r'(\s*\(\d+\)|\s+_\d+|\s+-\s*copy|\s+copy|\s+\d+|\s+v\d+)$'
-
     base_name, ext = os.path.splitext(filename)
-
-    # Apply regex substitution to the base name
     cleaned_name = re.sub(PATTERN, '', base_name, flags=re.IGNORECASE).strip()
-
-    # Recombine the cleaned base name and original extension
     return cleaned_name + ext
 
 
-# --- Gmail Specific Functions ---
+# --- Gmail Specific Functions (No Changes) ---
 
 def get_messages_with_ppt(service, user_id='me'):
     """
@@ -175,7 +167,6 @@ def find_all_drive_links(message_payload):
                     for match_id_in_bytes in DRIVE_ID_BYTE_PATTERN.finditer(decoded_bytes):
                         file_id = match_id_in_bytes.group(1).decode('utf-8')
 
-                        # Use normalized name for a better filename hint, but still use ID for uniqueness
                         filename = f"{file_id}.pptx"
 
                         try:
@@ -183,7 +174,6 @@ def find_all_drive_links(message_payload):
                             filename_match = re.search(r'([a-zA-Z0-9_ -]+\.pptx)', decoded_data, re.IGNORECASE)
                             if filename_match:
                                 raw_name = filename_match.group(1).strip()
-                                # Use the normalized name as the base of the saved file name
                                 normalized_raw_name = normalize_filename(raw_name).replace(".pptx", "")
                                 filename = f"{normalized_raw_name}_{file_id}.pptx"
                         except:
@@ -213,7 +203,6 @@ def download_file_from_drive(drive_service, file_id, file_name, temp_dir_base):
     if not clean_file_name.lower().endswith('.pptx'):
         clean_file_name = os.path.splitext(clean_file_name)[0].strip() + '.pptx'
 
-    # Use the name exactly as provided (since it is already unique ID-based)
     safe_file_name = re.sub(r'[^\w\-_\. ()]', '_', clean_file_name)
     file_path = os.path.join(temp_dir_base, safe_file_name)
 
@@ -254,7 +243,7 @@ def download_attachment(drive_service, gmail_service, msg_id, user_id='me'):
     downloaded_files = []
     message = None
     temp_dir_base = None
-    attachment_ids_processed = set()  # Set to track unique attachment IDs
+    attachment_ids_processed = set()
 
     try:
         temp_dir_base = tempfile.mkdtemp()
@@ -268,7 +257,6 @@ def download_attachment(drive_service, gmail_service, msg_id, user_id='me'):
         all_drive_links = find_all_drive_links(payload)
 
         for drive_file_id, drive_file_name in all_drive_links:
-            # drive_file_name is now guaranteed to be unique (ID-based)
             file_path = download_file_from_drive(
                 drive_service, drive_file_id, drive_file_name, temp_dir_base
             )
@@ -286,7 +274,6 @@ def download_attachment(drive_service, gmail_service, msg_id, user_id='me'):
         for part in all_file_parts:
             attachment_id = part['body']['attachmentId']
 
-            # CRITICAL FIX: Skip this part if the attachment ID has already been processed (prevents duplicates within one email)
             if attachment_id in attachment_ids_processed:
                 continue
             attachment_ids_processed.add(attachment_id)
@@ -302,8 +289,6 @@ def download_attachment(drive_service, gmail_service, msg_id, user_id='me'):
                 filename_base = part.get('filename') or f"attachment_part_{attachment_id}.pptx"
                 if not os.path.splitext(filename_base)[1]: filename_base += '.pptx'
 
-                # CRITICAL FIX: Ensure local filename uniqueness for physical attachments
-                # The local name is unique, but we will use the original name for normalization later
                 base_name, ext = os.path.splitext(filename_base)
                 counter = 1
                 safe_file_name = filename_base
@@ -321,7 +306,7 @@ def download_attachment(drive_service, gmail_service, msg_id, user_id='me'):
 
                 downloaded_files.append({
                     'path': temp_file_path,
-                    'filename': filename_base,  # Store the ORIGINAL, non-unique name for normalization
+                    'filename': filename_base,
                     'temp_dir': temp_dir_base
                 })
             except Exception as e:
@@ -342,7 +327,7 @@ def download_attachment(drive_service, gmail_service, msg_id, user_id='me'):
         pass
 
 
-# --- PPT Processing Functions ---
+# --- PPT Processing Functions (No Changes) ---
 
 def get_market_and_zone_name_from_ppt(ppt_path):
     """
@@ -397,7 +382,7 @@ def get_market_and_zone_name_from_ppt(ppt_path):
         return None, None
 
 
-# --- Drive Operations ---
+# --- Drive Operations (Folder Functions No Changes) ---
 
 def create_drive_folder(service, folder_name, parent_folder_id):
     """Creates a new folder."""
@@ -438,19 +423,20 @@ def find_or_create_folder(service, folder_name, parent_folder_id):
         return None
 
 
-def strict_replace_file_in_drive(service, file_path, original_file_name, parent_folder_id):
+# --- Drive Operations (Modified Replacement Logic) ---
+
+def strict_replace_file_in_drive(service, file_path, desired_filename, parent_folder_id):
     """
-    CORE LOGIC: Deletes any existing file with the same normalized name in the folder,
-    then uploads the new file using the normalized name.
+    CORE LOGIC: Deletes any existing file with the DESIRED_FILENAME in the folder,
+    then uploads the new file using that same name.
     """
-    # Use the ORIGINAL filename for normalization to get the base name (e.g., 'BD_Presentation.pptx')
-    normalized_name = normalize_filename(original_file_name)
+    final_drive_name = desired_filename
     old_file_id = None
 
-    # --- Step 1: Search Drive for Old File by Normalized Name and Folder ID ---
+    # --- Step 1: Search Drive for Old File by FINAL_DRIVE_NAME and Folder ID ---
     try:
         query = (
-            f"name='{normalized_name}' and "
+            f"name='{final_drive_name}' and "
             f"'{parent_folder_id}' in parents and "
             "trashed=false"
         )
@@ -466,7 +452,7 @@ def strict_replace_file_in_drive(service, file_path, original_file_name, parent_
             old_file_id = existing_files[0]['id']
 
     except Exception as e:
-        print(f"Error searching for existing file '{normalized_name}': {e}")
+        print(f"Error searching for existing file '{final_drive_name}': {e}")
 
     # --- Step 2: Delete Old File (Strict Replacement) ---
     if old_file_id:
@@ -477,10 +463,10 @@ def strict_replace_file_in_drive(service, file_path, original_file_name, parent_
             print(f"Error deleting old file {old_file_id}: {e}. Proceeding with upload.")
 
     # --- Step 3: Create New File (Upload Latest) ---
-    print(f"✅ UPLOADING NEW FILE: '{normalized_name}'")
+    print(f"✅ UPLOADING NEW FILE: '{final_drive_name}'")
 
     file_metadata = {
-        'name': normalized_name,
+        'name': final_drive_name,
         'parents': [parent_folder_id]
     }
     media = MediaFileUpload(file_path, resumable=True)
@@ -503,12 +489,12 @@ def strict_replace_file_in_drive(service, file_path, original_file_name, parent_
         return None
 
 
-# --- Main Processing Logic ---
+# --- Main Processing Logic (Modified) ---
 
 def main_processor(ppt_file_path, original_file_name, parent_folder_id, drive_service):
     """
     Processes the PPT, determines the target folders (Zone/Market),
-    and uploads the file, implementing the strict replacement logic.
+    and uploads the file, ensuring the file name matches the Market folder name.
     """
     market_name, zone_name = get_market_and_zone_name_from_ppt(ppt_file_path)
     if not market_name:
@@ -528,12 +514,14 @@ def main_processor(ppt_file_path, original_file_name, parent_folder_id, drive_se
     if not market_folder_id:
         return {'error': f"Failed to create Market folder '{market_name}'. PPT file not uploaded."}
 
-    # 3. Perform Strict Replacement Upload
-    # Pass the local path, the ORIGINAL filename, and the final market folder ID
+    # 3. CRITICAL: Define the final desired file name (Folder Name + .pptx)
+    desired_drive_filename = market_name + '.pptx'
+
+    # 4. Perform Strict Replacement Upload
     uploaded_file_id = strict_replace_file_in_drive(
         drive_service,
         ppt_file_path,
-        original_file_name,
+        desired_drive_filename,  # <-- File name is now guaranteed to match folder name
         market_folder_id
     )
 
@@ -543,7 +531,7 @@ def main_processor(ppt_file_path, original_file_name, parent_folder_id, drive_se
         return {'error': 'Failed to upload/replace PPT file to the drive.'}
 
 
-# --- Django Views ---
+# --- Django Views (No Changes) ---
 
 def trigger_email_check_page(request):
     """
@@ -590,11 +578,9 @@ def check_email_and_upload(request):
 
             for file_data in downloaded_files:
                 temp_file_path = file_data['path']
-                # Get the filename used for normalization/replacement
                 original_filename = file_data['filename']
 
                 try:
-                    # Pass the original filename to the processor
                     result = main_processor(temp_file_path, original_filename, parent_folder_id, drive_service)
 
                     result['source_email_id'] = msg_id
