@@ -84,7 +84,7 @@ def process_webm_to_mp4(request):
         input_file_path = os.path.join(temp_dir, uploaded_file.name)
 
         base_name, _ = os.path.splitext(uploaded_file.name)
-        output_file_name = f"{base_name}_converted.mp4"
+        output_file_name = f"{base_name}.mp4"
         output_file_path = os.path.join(temp_dir, output_file_name)
 
         # 2. Save uploaded file to disk

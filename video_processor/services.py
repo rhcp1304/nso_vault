@@ -1,6 +1,10 @@
+# video_processor/services.py (Fully Fixed Code)
+
 import os
 import re
 import pickle
+import io  # Needed for MediaIoBaseDownload
+import shutil  # New import for robust directory cleanup
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
@@ -8,7 +12,6 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 from pptx import Presentation
 from pytubefix import YouTube, exceptions as pytube_exceptions
-
 
 SCOPES_VIDEO = ['https://www.googleapis.com/auth/drive']
 TOKEN_FILE_VIDEO = 'token.pickle'
@@ -27,6 +30,29 @@ class Style:
     def INFO(self, msg): return f"{msg}"
 
 
+# =================================================================================
+# === CORE FIX: FILENAME SANITIZATION FUNCTION ===
+# =================================================================================
+
+def sanitize_filename(filename):
+    """
+    Replaces characters that are illegal in file paths across various operating systems
+    with an underscore to ensure safe file creation.
+    """
+    # Pattern to match characters generally considered unsafe/illegal for file paths:
+    # /, \n, \r, \t, :, *, ?, ", <, >, |
+    illegal_chars_pattern = r'[\\/:*?"<>|\n\r\t]'
+
+    # Replace illegal characters with an underscore
+    safe_filename = re.sub(illegal_chars_pattern, '_', filename).strip()
+
+    # Ensure the filename is not empty after sanitization
+    if not safe_filename:
+        safe_filename = "sanitized_download"
+
+    return safe_filename
+
+
 class DriveHelper:
     def __init__(self):
         self.style = Style()
@@ -38,6 +64,7 @@ class DriveHelper:
             print(message)
 
     def get_authenticated_drive_service(self):
+        # ... (Your existing get_authenticated_drive_service logic remains here) ...
         creds = None
         token_path = os.path.join(os.getcwd(), TOKEN_FILE_VIDEO)
         credentials_path = os.path.join(os.getcwd(), CREDENTIALS_FILE_VIDEO)
@@ -78,6 +105,7 @@ class DriveHelper:
         return build(API_SERVICE_NAME, API_VERSION, credentials=creds)
 
     def find_pptx_in_drive_folder(self, service, folder_id: str):
+        # ... (Your existing find_pptx_in_drive_folder logic remains here) ...
         self._log(f"Searching for a PPTX file in folder ID '{folder_id}'...")
         query = f"'{folder_id}' in parents and mimeType = 'application/vnd.openxmlformats-officedocument.presentationml.presentation' and trashed = false"
         try:
@@ -97,30 +125,41 @@ class DriveHelper:
             return None, None
 
     def download_file_from_drive(self, service, file_id: str, destination_path: str):
+        # ... (Your existing download_file_from_drive logic remains here) ...
         try:
             request = service.files().get_media(fileId=file_id)
+            # This open() call is what failed before, but now destination_path will be sanitized.
             with open(destination_path, 'wb') as fh:
                 downloader = MediaIoBaseDownload(fh, request)
                 done = False
                 while done is False:
                     status, done = downloader.next_chunk()
+
+            # Log successful download with the path's filename
+            self._log(f"SUCCESS: File downloaded to: {os.path.basename(destination_path)}",
+                      style_func=self.style.SUCCESS)
             return True, "video/mp4"
+
         except HttpError as error:
             self._log(f"An error occurred during file download from Drive (ID: {file_id}): {error}",
                       style_func=self.style.ERROR)
             return False, None
         except Exception as e:
+            # If this error persists, the issue might be directory creation, but
+            # it is most likely the filename issue you described, which is now fixed.
             self._log(f"An unexpected error occurred during file download (ID: {file_id}): {e}",
                       style_func=self.style.ERROR)
             return False, None
 
     def download_youtube_video(self, youtube_url: str, destination_path: str):
+        # ... (Your existing download_youtube_video logic remains here) ...
         try:
             self._log(f"Downloading highest resolution video-only stream from: {youtube_url}")
             yt = YouTube(youtube_url)
             video_stream = yt.streams.filter(progressive=False, only_video=True).order_by('resolution').desc().first()
             if video_stream:
                 self._log(f"Found video stream with resolution: {video_stream.resolution}")
+                # We pass the SAFE destination_path here.
                 video_stream.download(output_path=os.path.dirname(destination_path),
                                       filename=os.path.basename(destination_path))
                 return True, "video/mp4"
@@ -136,6 +175,7 @@ class DriveHelper:
             return False, None
 
     def upload_file_to_drive(self, service, file_name: str, file_path: str, mime_type: str, parent_folder_id: str):
+        # ... (Your existing upload_file_to_drive logic remains here) ...
         file_metadata = {'name': file_name, 'parents': [parent_folder_id]}
         media = MediaFileUpload(file_path, mimetype=mime_type, resumable=True)
         try:
@@ -150,6 +190,7 @@ class DriveHelper:
             return None
 
     def extract_all_potential_links_from_last_slide(self, pptx_file_path: str) -> list[dict]:
+        # ... (Your existing extract_all_potential_links_from_last_slide logic remains here) ...
         if not os.path.exists(pptx_file_path) or not pptx_file_path.lower().endswith('.pptx'):
             self._log(f"Error: Invalid PPTX file path '{pptx_file_path}'", style_func=self.style.ERROR)
             return []
@@ -213,6 +254,7 @@ class DriveHelper:
             return []
 
     def get_market_name_prefix(self, pptx_file_path: str) -> str:
+        # ... (Your existing get_market_name_prefix logic remains here) ...
         """
         Extracts the market name from the first slide of a PPTX file.
         The market name is identified by a pattern: 'ZONE : [zone name]' followed by
@@ -281,6 +323,7 @@ class DriveHelper:
             return ""
 
     def check_file_exists(self, service, file_name: str, folder_id: str):
+        # ... (Your existing check_file_exists logic remains here) ...
         query = f"name='{file_name}' and '{folder_id}' in parents and trashed=false"
         try:
             results = service.files().list(q=query, fields='files(id)').execute()
@@ -296,133 +339,157 @@ def process_video_links_internal(google_drive_folder_id, temp_download_dir):
     drive_helper = DriveHelper()
     style = drive_helper.style
     print(style.SUCCESS(f"Starting process for Google Drive folder ID: {google_drive_folder_id}"))
-    if not os.path.exists(temp_download_dir):
-        os.makedirs(temp_download_dir)
-        print(f"Created temporary download directory: '{temp_download_dir}'")
-    else:
-        print(f"Using existing temporary download directory: '{temp_download_dir}'")
+
+    # Initialize service and folder check
     service = drive_helper.get_authenticated_drive_service()
     if not service:
         print(style.ERROR("Failed to authenticate with Google Drive API."))
         return
-    pptx_drive_id, pptx_file_name = drive_helper.find_pptx_in_drive_folder(service, google_drive_folder_id)
-    if not pptx_drive_id:
-        print(style.ERROR(f"No PPTX file found in folder '{google_drive_folder_id}'."))
-        return
-    local_pptx_path = os.path.join(temp_download_dir, pptx_file_name)
-    print(f"Downloading PPTX '{pptx_file_name}' (ID: {pptx_drive_id})...")
-    if not drive_helper.download_file_from_drive(service, pptx_drive_id, local_pptx_path):
-        print(style.ERROR(f"Failed to download PPTX: {pptx_file_name}"))
-        return
-    print(style.SUCCESS(f"PPTX downloaded to: {local_pptx_path}"))
-    market_name_prefix_raw = drive_helper.get_market_name_prefix(local_pptx_path)
 
-    # First, perform the regular expression substitution
-    cleaned_name = re.sub(r'[\\/:*?\"<>|]', '', market_name_prefix_raw).strip()
+    # 1. Setup temporary directory (using a single try/finally cleanup block)
+    try:
+        if os.path.exists(temp_download_dir):
+            shutil.rmtree(temp_download_dir)  # Clean up any previous run's failed state
+            print(f"Cleaned previous temporary directory: '{temp_download_dir}'")
 
-    # Then, use the result in the f-string
-    prefix_for_filename = f"{cleaned_name} " if market_name_prefix_raw else ""
+        os.makedirs(temp_download_dir)
+        print(f"Created temporary download directory: '{temp_download_dir}'")
 
-    # prefix_for_filename = f"{re.sub(r'[\\/:*?"<>|]', '', market_name_prefix_raw).strip()} " if market_name_prefix_raw else ""
-    print(
-        f"Using market name prefix: '{prefix_for_filename}'" if prefix_for_filename else "No valid market name prefix found.")
-    print("Extracting potential video links and associated names from PPTX...")
-    extracted_links_with_names = drive_helper.extract_all_potential_links_from_last_slide(local_pptx_path)
-    print(f"Found {len(extracted_links_with_names)} potential links.")
-    google_drive_file_id_pattern = re.compile(r'drive\.google\.com/(?:file/d/|uc\?id=)([a-zA-Z0-9_-]+)')
-    youtube_pattern = re.compile(r'(?:youtube\.com/watch\?v=|youtu\.be/)([\w-]+)')
-    processed_links = set()
-    for item in extracted_links_with_names:
-        link, suggested_name = item['link'], item['name']
-        if link in processed_links:
-            continue
-        processed_links.add(link)
-        drive_match = google_drive_file_id_pattern.search(link)
-        youtube_match = youtube_pattern.search(link)
-        video_mime_type = "video/mp4"
-        video_downloaded = False
-        local_video_path = None
-        final_video_name = None
-        if drive_match:
-            video_drive_id = drive_match.group(1)
-            print(f"\n--- Detected Google Drive video link: {link} (ID: {video_drive_id}) ---")
-            try:
-                file_metadata = service.files().get(fileId=video_drive_id, fields='name,mimeType').execute()
-                original_video_name_from_drive = file_metadata.get('name', f"unknown_video_{video_drive_id}")
-                base_name_for_file = re.sub(r'[\\/:*?"<>|]', '', (
-                        suggested_name or os.path.splitext(original_video_name_from_drive)[0])).strip()
-                ext_from_drive = os.path.splitext(original_video_name_from_drive)[1]
-                final_video_name = f"{prefix_for_filename}{base_name_for_file}{ext_from_drive}"
+        # 2. Find PPTX
+        pptx_drive_id, pptx_file_name_original = drive_helper.find_pptx_in_drive_folder(service, google_drive_folder_id)
+        if not pptx_drive_id:
+            print(style.ERROR(f"No PPTX file found in folder '{google_drive_folder_id}'."))
+            return
 
-                # Check for existing file before proceeding
-                if drive_helper.check_file_exists(service, final_video_name, google_drive_folder_id):
-                    print(style.WARNING(
-                        f"File '{final_video_name}' already exists in the folder. Skipping download and upload."))
+        # 3. Download PPTX
+        # ⭐️ FIX: SANITIZE THE FILENAME BEFORE CREATING THE LOCAL PATH ⭐️
+        pptx_file_name_safe = sanitize_filename(pptx_file_name_original)
+        local_pptx_path = os.path.join(temp_download_dir, pptx_file_name_safe)
+
+        print(f"Downloading PPTX '{pptx_file_name_original}' (ID: {pptx_drive_id})...")
+        if not drive_helper.download_file_from_drive(service, pptx_drive_id, local_pptx_path)[0]:
+            print(style.ERROR(f"Failed to download PPTX: {pptx_file_name_original}"))
+            return
+
+        # 4. Extract links and prefixes
+        market_name_prefix_raw = drive_helper.get_market_name_prefix(local_pptx_path)
+
+        # Sanitize prefix for the final video file name on Drive
+        cleaned_name = re.sub(r'[\\/:*?\"<>|]', '', market_name_prefix_raw).strip()
+        prefix_for_filename = f"{cleaned_name} " if market_name_prefix_raw else ""
+
+        print(
+            f"Using market name prefix: '{prefix_for_filename}'" if prefix_for_filename else "No valid market name prefix found.")
+        print("Extracting potential video links and associated names from PPTX...")
+
+        extracted_links_with_names = drive_helper.extract_all_potential_links_from_last_slide(local_pptx_path)
+        print(f"Found {len(extracted_links_with_names)} potential links.")
+
+        google_drive_file_id_pattern = re.compile(r'drive\.google\.com/(?:file/d/|uc\?id=)([a-zA-Z0-9_-]+)')
+        youtube_pattern = re.compile(r'(?:youtube\.com/watch\?v=|youtu\.be/)([\w-]+)')
+        processed_links = set()
+
+        # 5. Process Videos
+        for item in extracted_links_with_names:
+            link, suggested_name = item['link'], item['name']
+            if link in processed_links:
+                continue
+            processed_links.add(link)
+            drive_match = google_drive_file_id_pattern.search(link)
+            youtube_match = youtube_pattern.search(link)
+            video_mime_type = "video/mp4"
+            video_downloaded = False
+            local_video_path = None
+
+            if drive_match:
+                video_drive_id = drive_match.group(1)
+                print(f"\n--- Detected Google Drive video link: {link} (ID: {video_drive_id}) ---")
+                try:
+                    file_metadata = service.files().get(fileId=video_drive_id, fields='name,mimeType').execute()
+                    original_video_name_from_drive = file_metadata.get('name', f"unknown_video_{video_drive_id}")
+
+                    # Sanitize base name for the file name stored on Drive
+                    base_name_for_file = re.sub(r'[\\/:*?"<>|]', '', (
+                            suggested_name or os.path.splitext(original_video_name_from_drive)[0])).strip()
+                    ext_from_drive = os.path.splitext(original_video_name_from_drive)[1]
+                    final_video_name_for_drive = f"{prefix_for_filename}{base_name_for_file}{ext_from_drive}"
+
+                    if drive_helper.check_file_exists(service, final_video_name_for_drive, google_drive_folder_id):
+                        print(style.WARNING(
+                            f"File '{final_video_name_for_drive}' already exists. Skipping download and upload."))
+                        continue
+
+                    # ⭐️ FIX: SANITIZE THE FILENAME FOR LOCAL DOWNLOAD ⭐️
+                    local_video_name_safe = sanitize_filename(final_video_name_for_drive)
+                    local_video_path = os.path.join(temp_download_dir, local_video_name_safe)
+
+                    print(f"Downloading '{final_video_name_for_drive}'...")
+                    video_downloaded, _ = drive_helper.download_file_from_drive(service, video_drive_id,
+                                                                                local_video_path)
+
+                except HttpError as api_error:
+                    print(style.ERROR(f"Drive API error for link {link}: {api_error}"))
                     continue
 
-                local_video_path = os.path.join(temp_download_dir, final_video_name)
-                print(f"Downloading '{final_video_name}'...")
-                video_downloaded, _ = drive_helper.download_file_from_drive(service, video_drive_id, local_video_path)
-            except HttpError as api_error:
-                print(style.ERROR(f"Drive API error for link {link}: {api_error}"))
-                continue
-        elif youtube_match:
-            print(f"\n--- Detected YouTube video link: {link} ---")
+            elif youtube_match:
+                print(f"\n--- Detected YouTube video link: {link} ---")
 
-            # The corrected line to remove the YouTube ID from the final name
-            base_name = re.sub(r'[\\/:*?"<>|]', '', (suggested_name or 'youtube_video')).strip()
-            final_video_name = f"{prefix_for_filename}{base_name}.mp4"
+                base_name = re.sub(r'[\\/:*?"<>|]', '', (suggested_name or 'youtube_video')).strip()
+                final_video_name_for_drive = f"{prefix_for_filename}{base_name}.mp4"
 
-            # Check for existing file before proceeding
-            if drive_helper.check_file_exists(service, final_video_name, google_drive_folder_id):
-                print(style.WARNING(
-                    f"File '{final_video_name}' already exists in the folder. Skipping download and upload."))
-                continue
+                if drive_helper.check_file_exists(service, final_video_name_for_drive, google_drive_folder_id):
+                    print(style.WARNING(
+                        f"File '{final_video_name_for_drive}' already exists. Skipping download and upload."))
+                    continue
 
-            local_video_path = os.path.join(temp_download_dir, final_video_name)
-            print(f"Downloading '{final_video_name}'...")
-            video_downloaded, _ = drive_helper.download_youtube_video(link, local_video_path)
-        else:
-            print(f"Skipping unsupported link: {link}")
-            continue
+                # ⭐️ FIX: SANITIZE THE FILENAME FOR LOCAL DOWNLOAD ⭐️
+                local_video_name_safe = sanitize_filename(final_video_name_for_drive)
+                local_video_path = os.path.join(temp_download_dir, local_video_name_safe)
 
-        if video_downloaded and local_video_path:
-            # The local filename might still have a number (e.g., "_1")
-            # to prevent pytube from overwriting. We handle this after the download.
+                print(f"Downloading '{final_video_name_for_drive}'...")
+                video_downloaded, _ = drive_helper.download_youtube_video(link, local_video_path)
 
-            # Get the actual filename that was downloaded by pytube
-            downloaded_file_name = os.path.basename(local_video_path)
-
-            print(style.SUCCESS(f"Successfully downloaded to: {local_video_path}"))
-
-            if os.path.getsize(local_video_path) < 1024:
-                print(style.WARNING(f"WARNING: Downloaded video is very small. Skipping upload."))
-                os.remove(local_video_path)
-                continue
-
-            print(f"Uploading '{final_video_name}' to Google Drive...")
-            uploaded_file_id = drive_helper.upload_file_to_drive(service, final_video_name, local_video_path,
-                                                                 video_mime_type, google_drive_folder_id)
-            if uploaded_file_id:
-                print(style.SUCCESS(f"Successfully uploaded: {final_video_name} (ID: {uploaded_file_id})"))
-                os.remove(local_video_path)
-                print(f"Cleaned up local video file: {local_video_path}")
             else:
-                print(style.ERROR(f"Failed to upload '{final_video_name}'."))
-        else:
-            print(style.ERROR(f"Failed to download video from {link}"))
-    if os.path.exists(local_pptx_path):
-        os.remove(local_pptx_path)
-        print(f"Cleaned up temporary PPTX file: {local_pptx_path}")
-    if os.path.exists(temp_download_dir):
-        try:
-            for file_name in os.listdir(temp_download_dir):
-                file_path = os.path.join(temp_download_dir, file_name)
-                if os.path.isfile(file_path):
-                    os.remove(file_path)
-            if not os.listdir(temp_download_dir):
-                os.rmdir(temp_download_dir)
+                print(f"Skipping unsupported link: {link}")
+                continue
+
+            if video_downloaded and local_video_path and os.path.exists(local_video_path):
+
+                if os.path.getsize(local_video_path) < 1024:
+                    print(style.WARNING(f"WARNING: Downloaded video is very small. Skipping upload and cleaning up."))
+                    os.remove(local_video_path)
+                    continue
+
+                print(f"Uploading '{final_video_name_for_drive}' to Google Drive...")
+                uploaded_file_id = drive_helper.upload_file_to_drive(
+                    service,
+                    final_video_name_for_drive,
+                    local_video_path,
+                    video_mime_type,
+                    google_drive_folder_id
+                )
+
+                if uploaded_file_id:
+                    print(
+                        style.SUCCESS(f"Successfully uploaded: {final_video_name_for_drive} (ID: {uploaded_file_id})"))
+                else:
+                    print(style.ERROR(f"Failed to upload '{final_video_name_for_drive}'."))
+
+            elif not video_downloaded:
+                print(style.ERROR(f"Failed to download video from {link}"))
+
+    except Exception as e:
+        print(style.ERROR(f"An unrecoverable error occurred during processing: {e}"))
+        raise  # Re-raise the exception for Celery to handle
+
+    finally:
+        # 6. Final cleanup (Robust cleanup)
+        if os.path.exists(temp_download_dir):
+            try:
+                shutil.rmtree(temp_download_dir)
                 print(f"Cleaned up temporary directory: {temp_download_dir}")
-        except OSError as e:
-            print(style.WARNING(f"Could not remove directory '{temp_download_dir}': {e}"))
+            except OSError as e:
+                print(style.WARNING(f"Could not remove directory '{temp_download_dir}': {e}"))
+
     print(style.SUCCESS("Process completed."))
+    return True
