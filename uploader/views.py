@@ -216,7 +216,7 @@ def upload_page(request):
     """
     return render(request, 'uploader/index.html')
 
-
+ ₹
 @csrf_exempt
 @require_POST
 def process_upload(request):
