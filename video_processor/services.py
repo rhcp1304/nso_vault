@@ -189,20 +189,25 @@ class DriveHelper:
                       style_func=self.style.ERROR)
             return None
 
-    def extract_all_potential_links_from_last_slide(self, pptx_file_path: str) -> list[dict]:
-        # ... (Your existing extract_all_potential_links_from_last_slide logic remains here) ...
+    def extract_all_potential_links(self, pptx_file_path: str) -> list[dict]:
+        """
+        Iterates through ALL slides in the presentation to extract potential
+        video links from shapes, text frames, and tables.
+        """
         if not os.path.exists(pptx_file_path) or not pptx_file_path.lower().endswith('.pptx'):
             self._log(f"Error: Invalid PPTX file path '{pptx_file_path}'", style_func=self.style.ERROR)
             return []
+
         found_links_with_names = []
         url_pattern = re.compile(r'https?://[^\s\]\)\}>"]+')
+
         try:
             prs = Presentation(pptx_file_path)
             if not prs.slides:
                 self._log("No slides found in presentation.")
                 return []
-            last_slide = prs.slides[-1]
-            self._log(f"Analyzing the last slide (Slide {len(prs.slides)}) for all potential links...")
+
+            self._log(f"Analyzing {len(prs.slides)} slides for potential links...")
 
             def get_text_from_cell(cell):
                 if cell.text_frame:
@@ -212,43 +217,56 @@ class DriveHelper:
             def find_urls_in_text_content(text_frame_obj, associated_name=None):
                 for paragraph in text_frame_obj.paragraphs:
                     full_text = "".join([run.text for run in paragraph.runs])
+                    # Find plain text matches
                     for match in url_pattern.finditer(full_text):
                         found_links_with_names.append({'name': associated_name, 'link': match.group(0).strip()})
+                    # Find embedded hyperlinks
                     for run in paragraph.runs:
-                        if run.hyperlink.address:
+                        if run.hyperlink and run.hyperlink.address:
                             found_links_with_names.append({'name': associated_name, 'link': run.hyperlink.address})
 
-            for shape in last_slide.shapes:
-                if hasattr(shape, 'action') and shape.action.hyperlink:
-                    found_links_with_names.append({'name': None, 'link': shape.action.hyperlink.address})
-                if shape.has_text_frame:
-                    find_urls_in_text_content(shape.text_frame)
-                if shape.has_table:
-                    table = shape.table
-                    name_col_idx = -1
-                    if table.rows:
-                        header_row = table.rows[0]
-                        for i, cell in enumerate(header_row.cells):
-                            cell_text = get_text_from_cell(cell).lower().strip()
-                            if "name" in cell_text or "store name" in cell_text:
-                                name_col_idx = i
-                                break
-                    for row_idx, row in enumerate(table.rows):
-                        if row_idx == 0: continue
-                        current_row_name = None
-                        if name_col_idx != -1 and name_col_idx < len(row.cells):
-                            current_row_name = get_text_from_cell(row.cells[name_col_idx])
-                        for cell in row.cells:
-                            if cell.text_frame:
-                                find_urls_in_text_content(cell.text_frame, associated_name=current_row_name)
-                if hasattr(shape, 'image') and hasattr(shape.image, 'hyperlink') and shape.image.hyperlink.address:
-                    found_links_with_names.append({'name': None, 'link': shape.image.hyperlink.address})
+            # Iterate through every slide
+            for slide_index, slide in enumerate(prs.slides):
+                for shape in slide.shapes:
+                    # 1. Action Hyperlinks (e.g., on images or buttons)
+                    if hasattr(shape, 'action') and shape.action.hyperlink and shape.action.hyperlink.address:
+                        found_links_with_names.append({'name': None, 'link': shape.action.hyperlink.address})
+
+                    # 2. Text Frames
+                    if shape.has_text_frame:
+                        find_urls_in_text_content(shape.text_frame)
+
+                    # 3. Tables (Common for lists of links/stores)
+                    if shape.has_table:
+                        table = shape.table
+                        name_col_idx = -1
+                        if table.rows:
+                            header_row = table.rows[0]
+                            for i, cell in enumerate(header_row.cells):
+                                cell_text = get_text_from_cell(cell).lower().strip()
+                                if any(x in cell_text for x in ["name", "store", "market"]):
+                                    name_col_idx = i
+                                    break
+
+                        for row_idx, row in enumerate(table.rows):
+                            # Optionally skip header, but check all cells for URLs
+                            current_row_name = None
+                            if name_col_idx != -1 and name_col_idx < len(row.cells):
+                                current_row_name = get_text_from_cell(row.cells[name_col_idx])
+
+                            for cell in row.cells:
+                                if cell.text_frame:
+                                    find_urls_in_text_content(cell.text_frame, associated_name=current_row_name)
+
+            # Deduplicate results
             unique_links_with_names = {}
             for item in found_links_with_names:
                 link, name = item['link'], item['name']
                 if link not in unique_links_with_names or (name and not unique_links_with_names[link]['name']):
                     unique_links_with_names[link] = {'name': name, 'link': link}
+
             return list(unique_links_with_names.values())
+
         except Exception as e:
             self._log(f"An error occurred while extracting links: {e}", style_func=self.style.ERROR)
             return []
@@ -382,7 +400,7 @@ def process_video_links_internal(google_drive_folder_id, temp_download_dir):
             f"Using market name prefix: '{prefix_for_filename}'" if prefix_for_filename else "No valid market name prefix found.")
         print("Extracting potential video links and associated names from PPTX...")
 
-        extracted_links_with_names = drive_helper.extract_all_potential_links_from_last_slide(local_pptx_path)
+        extracted_links_with_names = drive_helper.extract_all_potential_links(local_pptx_path)
         print(f"Found {len(extracted_links_with_names)} potential links.")
 
         google_drive_file_id_pattern = re.compile(r'drive\.google\.com/(?:file/d/|uc\?id=)([a-zA-Z0-9_-]+)')
