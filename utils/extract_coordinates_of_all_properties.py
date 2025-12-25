@@ -18,7 +18,7 @@ from reportlab.lib import colors
 ROOT_FOLDER_ID = '1PbLZ5yU2a2a4aacPiFpfF2uM7q0xGzkU'
 CLIENT_SECRETS_FILE = 'bdstorage_credentials.json'
 TOKEN_FILE = 'token.json'
-OUTPUT_PDF = 'Drive_Coordinates_Report.pdf'
+OUTPUT_PDF = 'coordinates_list.pdf'
 SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
 
 
