@@ -63,3 +63,5 @@ youtube_credentials.json # YouTube API credentials
 /temp_pipeline_downloads/
 /static/
 /staticfiles/
+/bdstorage_credentials.json
+/token.pickle
