@@ -511,3 +511,49 @@ def process_video_links_internal(google_drive_folder_id, temp_download_dir):
 
     print(style.SUCCESS("Process completed."))
     return True
+
+# Add this to the bottom of video_processor/services.py
+
+def run_recursive_video_automation(root_folder_id, base_temp_dir):
+    """
+    Scans Google Drive starting from root_folder_id.
+    If a folder contains a PPTX, it triggers the download logic.
+    """
+    helper = DriveHelper()
+    service = helper.get_service()
+    style = helper.style
+
+    def crawl(current_folder_id, current_folder_name):
+        print(f"\n{style.INFO('='*60)}")
+        print(f"📂 SCANNING FOLDER: {current_folder_name} (ID: {current_folder_id})")
+        print(f"{style.INFO('='*60)}")
+
+        # 1. Check if this specific folder has a PPTX
+        query = f"'{current_folder_id}' in parents and mimeType = 'application/vnd.openxmlformats-officedocument.presentationml.presentation' and trashed = false"
+        try:
+            results = service.files().list(q=query, fields='files(id, name)').execute()
+            pptx_files = results.get('files', [])
+
+            if pptx_files:
+                print(style.SUCCESS(f"Found PPTX in '{current_folder_name}'. Triggering download logic..."))
+                # CALL YOUR EXISTING FUNCTION HERE
+                # We create a unique temp path for this specific folder
+                folder_temp_path = os.path.join(base_temp_dir, current_folder_id)
+                process_video_links_internal(current_folder_id, folder_temp_path)
+            else:
+                print(f"No PPTX in '{current_folder_name}', checking subfolders...")
+
+            # 2. Find all subfolders inside this folder to continue crawling
+            sub_query = f"'{current_folder_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+            sub_results = service.files().list(q=sub_query, fields='files(id, name)').execute()
+            subfolders = sub_results.get('files', [])
+
+            for folder in subfolders:
+                crawl(folder['id'], folder['name'])
+
+        except Exception as e:
+            print(style.ERROR(f"Error crawling folder {current_folder_name}: {e}"))
+
+    # Start the recursive loop
+    crawl(root_folder_id, "ROOT")
+    print(style.SUCCESS("\n✅ RECURSIVE AUTOMATION COMPLETE."))
