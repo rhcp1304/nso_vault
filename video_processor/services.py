@@ -514,19 +514,28 @@ def process_video_links_internal(google_drive_folder_id, temp_download_dir):
 
 # Add this to the bottom of video_processor/services.py
 
+# REPLACE the existing run_recursive_video_automation at the end of services.py with this:
+
 def run_recursive_video_automation(root_folder_id, base_temp_dir):
     """
     Scans Google Drive starting from root_folder_id.
     If a folder contains a PPTX, it triggers the download logic.
     """
     helper = DriveHelper()
-    service = helper.get_service()
+
+    # FIX 1: Use the actual method name you defined in your class
+    service = helper.get_authenticated_drive_service()
+
     style = helper.style
 
+    if not service:
+        print(style.ERROR("Failed to authenticate Drive service for recursion."))
+        return
+
     def crawl(current_folder_id, current_folder_name):
-        print(f"\n{style.INFO('='*60)}")
+        print(f"\n{style.INFO('=' * 60)}")
         print(f"📂 SCANNING FOLDER: {current_folder_name} (ID: {current_folder_id})")
-        print(f"{style.INFO('='*60)}")
+        print(f"{style.INFO('=' * 60)}")
 
         # 1. Check if this specific folder has a PPTX
         query = f"'{current_folder_id}' in parents and mimeType = 'application/vnd.openxmlformats-officedocument.presentationml.presentation' and trashed = false"
@@ -536,9 +545,11 @@ def run_recursive_video_automation(root_folder_id, base_temp_dir):
 
             if pptx_files:
                 print(style.SUCCESS(f"Found PPTX in '{current_folder_name}'. Triggering download logic..."))
-                # CALL YOUR EXISTING FUNCTION HERE
-                # We create a unique temp path for this specific folder
+
+                # Create a unique temp path for this specific folder
                 folder_temp_path = os.path.join(base_temp_dir, current_folder_id)
+
+                # CALL YOUR EXISTING FUNCTION (no changes to your main logic)
                 process_video_links_internal(current_folder_id, folder_temp_path)
             else:
                 print(f"No PPTX in '{current_folder_name}', checking subfolders...")
@@ -556,4 +567,6 @@ def run_recursive_video_automation(root_folder_id, base_temp_dir):
 
     # Start the recursive loop
     crawl(root_folder_id, "ROOT")
-    print(style.SUCCESS("\n✅ RECURSIVE AUTOMATION COMPLETE."))
+
+    # FIX 2: Removed the systemctl stop command so the worker stays Always-On.
+    print(style.SUCCESS("\n✅ RECURSIVE AUTOMATION COMPLETE. Worker remains IDLE for next task."))
