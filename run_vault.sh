@@ -19,6 +19,9 @@ cd $PROJECT_DIR
 echo "🧹 Cleaning up old Celery processes..."
 pkill -9 -f celery 2>/dev/null
 
+# --- CLEAN OLD LOGS ---
+cat /dev/null > "$LOG_FILE"
+
 # 3. Update the Python Trigger Script
 # This swaps the folder_id value in boot_trigger.py
 echo "📝 Updating Root Folder ID to: $NEW_ID"
