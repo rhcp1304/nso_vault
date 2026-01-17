@@ -15,14 +15,6 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 from pptx import Presentation
-from pytubefix import YouTube, exceptions as pytube_exceptions
-from google.oauth2.credentials import Credentials
-
-# Import the PPT uploader helper functions
-from uploader.views import authenticate_google_drive, get_market_and_zone_name_from_ppt, create_drive_folder, \
-    find_or_create_folder, upload_file_to_drive, main_processor
-
-# Import the Celery task
 from video_processor.tasks import process_video_task
 
 # =================================================================================

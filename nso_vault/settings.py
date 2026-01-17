@@ -37,9 +37,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'uploader',
     'video_processor',
-    'video_converter',
     'drive_uploader'
 ]
 

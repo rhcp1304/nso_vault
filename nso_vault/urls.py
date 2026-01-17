@@ -3,8 +3,6 @@ from django.urls import path, include
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('uploader/', include('uploader.urls')),
     path('video_processor/', include('video_processor.urls')),
-    path('video-convert/', include('video_converter.urls')),
     path('drive-upload', include('drive_uploader.urls')),
 ]
