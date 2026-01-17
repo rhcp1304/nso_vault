@@ -95,8 +95,8 @@ class DriveHelper:
                         style_func=self.style.ERROR)
                     return None
                 flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES_VIDEO)
-                creds = flow.run_console()
-            self._log(f"Saving new credentials to {TOKEN_FILE_VIDEO}...")
+                creds = flow.run_local_server(port=0, open_browser=False)
+                self._log(f"Saving new credentials to {TOKEN_FILE_VIDEO}...")
             with open(token_path, 'wb') as token:
                 pickle.dump(creds, token)
 
